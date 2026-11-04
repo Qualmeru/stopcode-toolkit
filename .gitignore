@@ -1,0 +1,73 @@
+# ---------------------------------------------------------------------------
+# Everything here is output ABOUT this machine rather than tooling. The scripts
+# themselves are portable (they use $PSScriptRoot and $env:), so they are safe
+# to publish; what they produce is not.
+#
+# If a file below turns out to be something you want to share, remove its line
+# and commit it deliberately rather than loosening a whole pattern.
+# ---------------------------------------------------------------------------
+
+
+# --- collected crash evidence ----------------------------------------------
+# Kernel dumps contain raw memory from a running system: open documents, window
+# titles, in some cases credentials. Never publish these.
+diag/
+*.dmp
+*.hdmp
+*.mdmp
+
+
+# --- tool state and logs ----------------------------------------------------
+# Machine-specific counters, watcher bookkeeping and run logs. Useless to
+# anyone else and they reveal usage patterns and timings.
+crash-baseline.json
+seen-dumps.txt
+seen-dumps.json
+seen-kernel-reports.txt
+watcher.log
+video-engine.csv
+gaming-mode-state.json
+
+
+# --- captured readings ------------------------------------------------------
+# Per-run output: GPU telemetry, dump headers, resolved kernel addresses and
+# system surveys. All specific to one boot of one machine.
+gpu-log-*.csv
+survey-system.txt
+peek-livedump.txt
+resolve-kernel-addr.txt
+restart-asus-osd.txt
+cleanup-survey.txt
+gui-err.txt
+gui-out.txt
+
+
+# --- the GPU preference backup ----------------------------------------------
+# This one is the most revealing file in the folder: it lists full install
+# paths for every game and application with a GPU preference set.
+restore-gpu-prefs.reg
+gpu-prefs-recovered.tsv
+
+
+# --- the written investigation ----------------------------------------------
+# A detailed profile of one machine: hardware, installed software, game paths,
+# fault history, uptime. Interesting, but personal.
+# Delete this line if you decide you want to share it.
+fault-report.html
+
+
+# --- generated locally ------------------------------------------------------
+# make-shortcut.ps1 redraws the icon on demand, so it does not need committing.
+# Remove this line if you would rather ship the icon with the repo.
+ControlPanel.ico
+
+
+# --- editors and OS ---------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+*~
+__pycache__/
+*.pyc

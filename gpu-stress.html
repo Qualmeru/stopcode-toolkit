@@ -1,0 +1,269 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>GPU stress - 3D + video decode</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0b0d10; color:#e6e9ef;
+         font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  header { padding:10px 14px; border-bottom:1px solid #222834; display:flex;
+           gap:16px; align-items:center; flex-wrap:wrap; }
+  button { background:#1b2130; color:#e6e9ef; border:1px solid #2c3446;
+           padding:6px 14px; border-radius:6px; cursor:pointer; font:inherit; }
+  button:hover { background:#232c3f; }
+  button[disabled] { opacity:.4; cursor:default; }
+  label { display:flex; gap:6px; align-items:center; }
+  #stats { padding:8px 14px; display:flex; gap:22px; flex-wrap:wrap;
+           border-bottom:1px solid #222834; background:#0e1116; }
+  #stats b { color:#7fd1ff; font-weight:600; }
+  .warn { color:#ffb454; }
+  .bad  { color:#ff6b6b; }
+  #wrap { display:grid; grid-template-columns:1fr 340px;
+          height:calc(100vh - 108px); }
+  canvas#gl { width:100%; height:100%; display:block; background:#000; }
+  #vids { overflow:auto; padding:8px; display:grid;
+          grid-template-columns:repeat(2,1fr); gap:6px; align-content:start;
+          border-left:1px solid #222834; }
+  #vids video { width:100%; border-radius:4px; background:#000; }
+  #log { position:fixed; bottom:0; left:0; right:0; max-height:26vh; overflow:auto;
+         background:#070910; border-top:1px solid #222834; padding:6px 14px; font-size:12px; }
+</style>
+
+<header>
+  <button id="start">Start stress</button>
+  <button id="stop" disabled>Stop</button>
+  <label>3D load <input id="load" type="range" min="1" max="80" value="24"><span id="loadv">24</span></label>
+  <label>Videos <input id="nvid" type="range" min="0" max="16" value="6"><span id="nvidv">6</span></label>
+  <span id="mode"></span>
+</header>
+
+<div id="stats">
+  <span>fps <b id="fps">-</b></span>
+  <span>frame <b id="ft">-</b> ms</span>
+  <span>worst <b id="worst">-</b> ms</span>
+  <span>hitches <b id="hitch" class="warn">0</b></span>
+  <span>stalls&gt;500ms <b id="stall" class="bad">0</b></span>
+  <span>video frames <b id="vframes">0</b></span>
+  <span>dropped <b id="vdrop" class="warn">0</b></span>
+  <span>elapsed <b id="elapsed">0</b>s</span>
+</div>
+
+<div id="wrap">
+  <canvas id="gl"></canvas>
+  <div id="vids"></div>
+</div>
+<div id="log"></div>
+
+<script>
+var $ = function (id) { return document.getElementById(id); };
+function log(m) {
+  var d = document.createElement('div');
+  d.textContent = new Date().toLocaleTimeString() + '  ' + m;
+  $('log').prepend(d);
+}
+
+/* ---------- WebGL: heavy fragment shader, deliberately expensive ---------- */
+var cv = $('gl');
+var gl = cv.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' })
+      || cv.getContext('webgl',  { antialias: false, powerPreference: 'high-performance' });
+if (!gl) { log('WebGL unavailable - 3D portion disabled.'); }
+
+var VS = 'attribute vec2 p; void main(){ gl_Position = vec4(p,0.,1.); }';
+var FS = [
+'precision highp float;',
+'uniform vec2 res; uniform float t; uniform int steps;',
+'float h(vec3 p){ return fract(sin(dot(p,vec3(12.9898,78.233,37.719)))*43758.5453); }',
+'float n(vec3 p){ vec3 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);',
+'  float a=mix(mix(mix(h(i),h(i+vec3(1,0,0)),f.x),mix(h(i+vec3(0,1,0)),h(i+vec3(1,1,0)),f.x),f.y),',
+'              mix(mix(h(i+vec3(0,0,1)),h(i+vec3(1,0,1)),f.x),mix(h(i+vec3(0,1,1)),h(i+vec3(1,1,1)),f.x),f.y),f.z);',
+'  return a; }',
+'void main(){',
+'  vec2 uv=(gl_FragCoord.xy-.5*res)/res.y;',
+'  vec3 ro=vec3(0.,0.,t*.4), rd=normalize(vec3(uv,1.));',
+'  float d=0.; vec3 col=vec3(0.);',
+'  for(int i=0;i<80;i++){',
+'    if(i>=steps) break;',
+'    vec3 p=ro+rd*d;',
+'    float v=n(p*2.3)+0.5*n(p*5.1)+0.25*n(p*11.3);',
+'    col += vec3(v*v*0.02, v*0.015, v*0.03);',
+'    d += 0.08;',
+'  }',
+'  gl_FragColor=vec4(col,1.);',
+'}'
+].join('\n');
+
+function sh(type, src) {
+  var s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) log('shader: ' + gl.getShaderInfoLog(s));
+  return s;
+}
+
+var prog, uRes, uT, uSteps;
+if (gl) {
+  prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
+  var loc = gl.getAttribLocation(prog, 'p');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  uRes   = gl.getUniformLocation(prog, 'res');
+  uT     = gl.getUniformLocation(prog, 't');
+  uSteps = gl.getUniformLocation(prog, 'steps');
+}
+
+/* ---------- video decode load: generate a clip locally, then loop N copies ---------- */
+function makeClip(seconds) {
+  return new Promise(function (resolve, reject) {
+    var c = document.createElement('canvas');
+    c.width = 1280; c.height = 720;
+    var x = c.getContext('2d');
+    var stream = c.captureStream(60);
+    var mime = 'video/webm;codecs=vp9';
+    if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8';
+    if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm';
+    var rec;
+    try {
+      rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12000000 });
+    } catch (e) { return reject(e); }
+    var chunks = [];
+    rec.ondataavailable = function (e) { if (e.data.size) chunks.push(e.data); };
+    rec.onstop = function () {
+      resolve(URL.createObjectURL(new Blob(chunks, { type: 'video/webm' })));
+    };
+    rec.start();
+    var t0 = performance.now();
+    (function draw() {
+      var e = (performance.now() - t0) / 1000;
+      x.fillStyle = '#000';
+      x.fillRect(0, 0, c.width, c.height);
+      /* high-entropy content so the encoder and decoder actually do work */
+      for (var i = 0; i < 220; i++) {
+        x.fillStyle = 'hsl(' + ((i * 7 + e * 90) % 360) + ' 90% ' +
+                      (35 + 30 * Math.sin(e * 3 + i)) + '%)';
+        x.fillRect((Math.sin(e * 2 + i) * 0.5 + 0.5) * c.width,
+                   (Math.cos(e * 1.7 + i * 1.3) * 0.5 + 0.5) * c.height,
+                   50 + 40 * Math.sin(e + i), 30 + 25 * Math.cos(e * 1.4 + i));
+      }
+      if (e >= seconds) { rec.stop(); return; }
+      requestAnimationFrame(draw);
+    })();
+  });
+}
+
+/* ---------- run loop + instrumentation ---------- */
+var running = false, raf = 0, t0 = 0, frames = 0, last = 0, worst = 0,
+    hitches = 0, stalls = 0, vframes = 0, vdrop = 0, clipUrl = null, timer = 0;
+
+function resize() {
+  var r = cv.getBoundingClientRect();
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width  = Math.max(320, (r.width  * dpr) | 0);
+  cv.height = Math.max(240, (r.height * dpr) | 0);
+  if (gl) gl.viewport(0, 0, cv.width, cv.height);
+}
+window.addEventListener('resize', resize);
+
+function frame(now) {
+  if (!running) return;
+  if (last) {
+    var dt = now - last;
+    if (dt > worst) worst = dt;
+    if (dt > 50) hitches++;
+    if (dt > 500) { stalls++; log('STALL ' + dt.toFixed(0) + 'ms - GPU may have reset'); }
+  }
+  last = now; frames++;
+  if (gl) {
+    gl.uniform2f(uRes, cv.width, cv.height);
+    gl.uniform1f(uT, (now - t0) / 1000);
+    gl.uniform1i(uSteps, +$('load').value);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  raf = requestAnimationFrame(frame);
+}
+
+function attachVideoStats(v) {
+  if (!v.requestVideoFrameCallback) return;
+  var cb = function () {
+    vframes++;
+    if (v.getVideoPlaybackQuality) {
+      var q = v.getVideoPlaybackQuality();
+      if (q && q.droppedVideoFrames > vdrop) vdrop = q.droppedVideoFrames;
+    }
+    if (running) v.requestVideoFrameCallback(cb);
+  };
+  v.requestVideoFrameCallback(cb);
+}
+
+function start() {
+  if (running) return;
+  $('start').disabled = true;
+  $('mode').textContent = 'generating test clip...';
+  var ready = clipUrl ? Promise.resolve(clipUrl) : makeClip(4);
+  ready.then(function (url) {
+    clipUrl = url;
+    log('test clip ready');
+  }).catch(function (e) {
+    log('clip generation failed: ' + e.message + ' (3D load only)');
+  }).then(function () {
+    var n = +$('nvid').value;
+    var box = $('vids');
+    box.innerHTML = '';
+    if (clipUrl) {
+      for (var i = 0; i < n; i++) {
+        var v = document.createElement('video');
+        v.src = clipUrl; v.loop = true; v.muted = true;
+        v.playsInline = true; v.autoplay = true;
+        box.appendChild(v);
+        v.play().catch(function () {});
+        attachVideoStats(v);
+      }
+    }
+    running = true;
+    $('stop').disabled = false;
+    $('mode').textContent = 'running - ' + n + ' video streams + WebGL';
+    t0 = performance.now();
+    last = 0; frames = 0; worst = 0; hitches = 0; stalls = 0; vframes = 0; vdrop = 0;
+    resize();
+    raf = requestAnimationFrame(frame);
+    timer = setInterval(function () {
+      var el = (performance.now() - t0) / 1000;
+      $('fps').textContent     = (frames / el).toFixed(1);
+      $('ft').textContent      = (el * 1000 / Math.max(frames, 1)).toFixed(1);
+      $('worst').textContent   = worst.toFixed(0);
+      $('hitch').textContent   = hitches;
+      $('stall').textContent   = stalls;
+      $('vframes').textContent = vframes;
+      $('vdrop').textContent   = vdrop;
+      $('elapsed').textContent = el.toFixed(0);
+    }, 500);
+    log('stress started');
+  });
+}
+
+function stop() {
+  running = false;
+  cancelAnimationFrame(raf);
+  clearInterval(timer);
+  var vs = $('vids').querySelectorAll('video');
+  for (var i = 0; i < vs.length; i++) { vs[i].pause(); vs[i].src = ''; }
+  $('vids').innerHTML = '';
+  $('start').disabled = false;
+  $('stop').disabled = true;
+  $('mode').textContent = 'stopped';
+  log('stopped - worst frame ' + worst.toFixed(0) + 'ms, ' + hitches +
+      ' hitches, ' + stalls + ' stalls, ' + vdrop + ' dropped video frames');
+}
+
+$('start').onclick = start;
+$('stop').onclick  = stop;
+$('load').oninput  = function (e) { $('loadv').textContent = e.target.value; };
+$('nvid').oninput  = function (e) { $('nvidv').textContent = e.target.value; };
+resize();
+log('ready - press Start. Watch "stalls" and "dropped".');
+</script>
