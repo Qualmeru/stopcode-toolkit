@@ -206,7 +206,7 @@ $xaml = @'
               <TextBlock x:Name="TxtHead" Text="--" Foreground="#5BC08C" FontSize="13" FontFamily="Consolas"/>
             </StackPanel>
           </Border>
-          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="Current temperature and power draw of the RTX 3070, read from nvidia-smi. Turns amber above 75 degrees and red above 85.">
+          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="Current temperature and power draw of an NVIDIA GPU, read from nvidia-smi. Turns amber above 75 degrees and red above 85. Shows n/a when there is no NVIDIA GPU.">
             <StackPanel>
               <TextBlock Text="GPU" Foreground="#78838F" FontSize="9" FontFamily="Consolas"/>
               <TextBlock x:Name="TxtGpu" Text="--" Foreground="#E7ECF3" FontSize="13" FontFamily="Consolas"/>
@@ -311,7 +311,7 @@ $xaml = @'
               <TextBlock x:Name="TxtMon" Style="{StaticResource Sub}" Text="--"/>
               <WrapPanel>
                 <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines. Intel's video engine is where the 0x141 faults happen, so this shows what might be triggering them." />
-                <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch GPU temperature, power, clocks and throttling for five minutes, and report whether any new faults occurred." />
+                <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch the GPU for five minutes (temperature, power and throttling on NVIDIA; engine load and memory on other GPUs), and report whether any new faults occurred." />
               </WrapPanel>
             </StackPanel>
           </Border>

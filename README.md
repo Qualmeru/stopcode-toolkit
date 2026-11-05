@@ -111,7 +111,7 @@ continuously.
 | Script | What it does |
 |---|---|
 | `log-video-engine.ps1` | Records which process drives which GPU's video engines. The watcher says *when* a fault happened; this says *what was using the engine*. |
-| `gpu-monitor.ps1` | Samples temperature, power, clocks and NVIDIA's clock-event reasons **by name**, plus TDR events and new kernel faults. Writes CSV. |
+| `gpu-monitor.ps1` | Samples temperature, power, clocks and NVIDIA's clock-event reasons **by name**, plus TDR events and new kernel faults. Without an NVIDIA GPU it uses the Windows GPU counters instead (engine load and GPU memory). Writes CSV. |
 | `gpu-stress.html` | Browser stress test driving 3D *and* video decode together. Generates its test clip in-page, so nothing is downloaded. Pure-3D benchmarks never touch the decode engine, which is where some faults live. |
 
 ### System

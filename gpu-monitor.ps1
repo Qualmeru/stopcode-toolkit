@@ -1,8 +1,10 @@
 <#
     gpu-monitor.ps1 - sample GPU telemetry while a stress test runs.
 
-    Records temperature, power, clocks, utilisation and NVIDIA's own throttle
-    reasons, plus Windows GPU engine counters and any new kernel fault reports.
+    On NVIDIA GPUs, records temperature, power, clocks, utilisation and NVIDIA's own throttle
+    reasons via nvidia-smi. Without nvidia-smi (Intel, AMD) it falls back to the
+    Windows GPU counters: per-engine load (3D, video decode, ...) and GPU memory.
+    Either way it also tracks TDR events and any new kernel fault reports.
     Writes a CSV and prints a summary that says whether the GPU throttled,
     hung, or stayed healthy.
 
@@ -18,7 +20,7 @@ param(
 )
 
 $smi = 'C:\Windows\System32\nvidia-smi.exe'
-if (-not (Test-Path $smi)) { Write-Warning 'nvidia-smi.exe not found.'; return }
+$hasSmi = Test-Path $smi
 
 $csv = Join-Path $PSScriptRoot ('gpu-log-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.csv')
 
@@ -42,6 +44,110 @@ Write-Host ("Monitoring for {0} min (interval {1}s)" -f $Minutes, $IntervalSec) 
 Write-Host ("Log: {0}" -f $csv) -ForegroundColor DarkGray
 Write-Host ("Kernel reports at start: {0}   TDR events: {1}" -f $startReports, $startTdr) -ForegroundColor DarkGray
 Write-Host ''
+
+$deadline = (Get-Date).AddMinutes($Minutes)
+
+# ------------------------------------------------------------------------
+# No NVIDIA GPU: fall back to the Windows GPU counters, which work for any
+# WDDM driver (Intel, AMD, NVIDIA). They give per-engine load and memory,
+# but not temperature, power or throttle reasons.
+if (-not $hasSmi) {
+    Write-Host '   No NVIDIA GPU (nvidia-smi not found) - using Windows GPU counters.' -ForegroundColor DarkGray
+    Write-Host '   Temperature, power and throttle reasons are not available this way.' -ForegroundColor DarkGray
+    Write-Host ''
+    Write-Host '   time       3D%  decode%  vproc%  compute%  copy%   GPU mem' -ForegroundColor Cyan
+    Write-Host '   --------  ----  -------  ------  --------  -----  --------'
+
+    $counters = '\GPU Engine(*)\Utilization Percentage',
+                '\GPU Adapter Memory(*)\Dedicated Usage',
+                '\GPU Adapter Memory(*)\Shared Usage'
+    $cols = 'videodecode','videoprocessing','compute','copy'
+    $rows = @()
+    $peak = @{ '3d' = 0; videodecode = 0; videoprocessing = 0; compute = 0; copy = 0 }
+    $peakMem = 0
+
+    while ((Get-Date) -lt $deadline) {
+        $t0 = Get-Date
+        $samples = (Get-Counter -Counter $counters -ErrorAction SilentlyContinue).CounterSamples
+        if (-not $samples) { Start-Sleep -Seconds $IntervalSec; continue }
+
+        # Same method as Task Manager: add up every process's share of each
+        # physical engine, then report the busiest engine of each type.
+        $engine = @{}; $mem = @{}
+        foreach ($x in $samples) {
+            if ($x.InstanceName -match '^pid_\d+_(luid_.+_eng_\d+)_engtype_(.+)$') {
+                $key = $matches[1] + '|' + $matches[2].ToLower()
+                $engine[$key] = [double]$engine[$key] + $x.CookedValue
+            } elseif ($x.Path -like '*\gpu adapter memory(*') {
+                $mem[$x.InstanceName] = [double]$mem[$x.InstanceName] + $x.CookedValue
+            }
+        }
+        $load = @{}
+        foreach ($k in $engine.Keys) {
+            $type = ($k -split '\|')[1]
+            $v = [math]::Min(100, $engine[$k])
+            if ($v -gt [double]$load[$type]) { $load[$type] = $v }
+        }
+        $memMB = if ($mem.Count) { [math]::Round((($mem.Values | Measure-Object -Maximum).Maximum) / 1MB) } else { 0 }
+
+        $g3d = [math]::Round([double]$load['3d'])
+        $vals = @{}
+        foreach ($c in $cols) { $vals[$c] = [math]::Round([double]$load[$c]) }
+        foreach ($c in @('3d') + $cols) {
+            $v = if ($c -eq '3d') { $g3d } else { $vals[$c] }
+            if ($v -gt $peak[$c]) { $peak[$c] = $v }
+        }
+        if ($memMB -gt $peakMem) { $peakMem = $memMB }
+
+        $now = Get-Date
+        $rows += [pscustomobject]@{
+            Time = $now.ToString('HH:mm:ss'); Gpu3DPct = $g3d
+            VideoDecodePct = $vals['videodecode']; VideoProcessingPct = $vals['videoprocessing']
+            ComputePct = $vals['compute']; CopyPct = $vals['copy']; GpuMemMB = $memMB
+        }
+
+        $col = if ($g3d -ge 95 -or $vals['videodecode'] -ge 95) { 'Yellow' } else { 'Gray' }
+        Write-Host ("   {0}  {1,4}  {2,7}  {3,6}  {4,8}  {5,5}  {6,5} MB" -f `
+            $now.ToString('HH:mm:ss'), $g3d, $vals['videodecode'], $vals['videoprocessing'],
+            $vals['compute'], $vals['copy'], $memMB) -ForegroundColor $col
+
+        # A counter sample takes a few seconds, so only sleep for what is left.
+        $left = $IntervalSec - ((Get-Date) - $t0).TotalSeconds
+        if ($left -gt 0) { Start-Sleep -Milliseconds ([int]($left * 1000)) }
+    }
+
+    $rows | Export-Csv -Path $csv -NoTypeInformation -Encoding utf8
+
+    $endReports = Get-KernelReportCount
+    $endTdr = @(Get-WinEvent -FilterHashtable @{LogName='System'; Id=4101} -MaxEvents 200 -ErrorAction SilentlyContinue).Count
+    $newFaults = $endReports - $startReports
+    $newTdr = $endTdr - $startTdr
+
+    Write-Host ''
+    Write-Host '  ================ SUMMARY ================' -ForegroundColor Cyan
+    Write-Host ("  samples          : {0}" -f $rows.Count)
+    Write-Host ("  peak 3D load     : {0} %" -f $peak['3d'])
+    Write-Host ("  peak video decode: {0} %" -f $peak['videodecode'])
+    Write-Host ("  peak GPU memory  : {0} MB" -f $peakMem)
+    Write-Host ("  new TDR events   : {0}" -f $newTdr)
+    Write-Host ("  new kernel faults: {0}" -f $newFaults)
+    Write-Host ''
+
+    if ($newFaults -gt 0) {
+        Write-Host '  >> NEW KERNEL FAULTS during the run - the stress reproduced it.' -ForegroundColor Red
+        Write-Host '     Run crash-count.ps1 to see which bugcheck.' -ForegroundColor Red
+    } elseif ($newTdr -gt 0) {
+        Write-Host '  >> The display driver reset (TDR) during the run.' -ForegroundColor Yellow
+    } else {
+        Write-Host '  >> GPU stayed healthy through this run.' -ForegroundColor Green
+    }
+    Write-Host ("  CSV: {0}" -f $csv) -ForegroundColor DarkGray
+    Write-Host ''
+    return
+}
+
+# ------------------------------------------------------------------------
+# NVIDIA GPU: nvidia-smi gives temperature, power, clocks and throttle reasons.
 Write-Host '   time     temp   power    SM MHz   GPU%   mem%   throttle' -ForegroundColor Cyan
 Write-Host '   -------- -----  -------  -------  -----  -----  --------------------'
 

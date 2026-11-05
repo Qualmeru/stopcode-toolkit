@@ -43,8 +43,9 @@ BUTTONS = {
     "BtnVideoReport": "Show which programs have been using each GPU's video engines. "
                       "Intel's video engine is where the 0x141 faults happen, so this "
                       "shows what might be triggering them.",
-    "BtnGpuMonitor": "Watch GPU temperature, power, clocks and throttling for five "
-                     "minutes, and report whether any new faults occurred.",
+    "BtnGpuMonitor": "Watch the GPU for five minutes (temperature, power and throttling "
+                     "on NVIDIA; engine load and memory on other GPUs), and report "
+                     "whether any new faults occurred.",
     "BtnCleanScan": "List what could be deleted and how much space it would free. "
                     "Changes nothing.",
     "BtnCleanApply": "Delete regenerable caches and stale crash dumps. Never touches "
@@ -69,8 +70,9 @@ TILES = {
     "HEADROOM": "How much commit is still free. Witcher 3 on its own needs about "
                 "10 GB. Green is comfortable, amber is tight, red means a demanding "
                 "game is likely to cause problems.",
-    "GPU": "Current temperature and power draw of the RTX 3070, read from nvidia-smi. "
-           "Turns amber above 75 degrees and red above 85.",
+    "GPU": "Current temperature and power draw of an NVIDIA GPU, read from nvidia-smi. "
+           "Turns amber above 75 degrees and red above 85. Shows n/a when there is "
+           "no NVIDIA GPU.",
     "FAULTS": "Kernel faults recorded by Windows, shown as 0x141 / 0x193 / 0xA. "
               "The 0x141 engine timeouts come from Intel's display driver and are the "
               "long-running problem on this machine.",
