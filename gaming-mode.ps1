@@ -42,7 +42,7 @@ param(
 $Presets = @{
     'clean'  = @{ Keep = @();                 Desc = 'close everything recommended' }
     'browse' = @{ Keep = @('chrome');         Desc = 'keep Chrome for looking things up' }
-    'work'   = @{ Keep = @('chrome','Code');  Desc = 'keep Chrome and VS Code' }
+    'work'   = @{ Keep = @('chrome','msedge','firefox','Code');  Desc = 'keep browsers (Chrome, Edge, Firefox) and VS Code' }
 }
 
 $stateFile = Join-Path $PSScriptRoot 'diag\gaming-mode-state.json'

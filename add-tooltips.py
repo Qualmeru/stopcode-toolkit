@@ -24,7 +24,7 @@ BUTTONS = {
                    "your browser too.",
     "BtnPreBrowse": "Tick everything recommended except Chrome, so you can still look "
                     "things up while playing.",
-    "BtnPreWork": "Keep both Chrome and VS Code open. Frees the least - check the "
+    "BtnPreWork": "Keep Chrome, Edge, Firefox and VS Code open. Frees the least - check the "
                   "headroom reading before using this with a demanding game.",
     "BtnPreNone": "Untick everything. Nothing will be closed when you press Apply.",
     "BtnApply": "Apply the VR choice, then close every ticked app. Each one is asked "

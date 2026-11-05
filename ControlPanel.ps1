@@ -50,7 +50,7 @@ $Caution = @{
 $Presets = @{
     'clean'  = @()
     'browse' = @('chrome')
-    'work'   = @('chrome','Code')
+    'work'   = @('chrome','msedge','firefox','Code')
 }
 
 # --------------------------------------------------------------------- layout
@@ -261,7 +261,7 @@ $xaml = @'
             <Rectangle Width="1" Fill="#28313D" Margin="6,2,14,2"/>
             <Button x:Name="BtnPreClean"  Content="Clean" ToolTip="Tick every recommended app. Frees the most memory, but closes your browser too." />
             <Button x:Name="BtnPreBrowse" Content="Browse" ToolTip="Tick everything recommended except Chrome, so you can still look things up while playing." />
-            <Button x:Name="BtnPreWork"   Content="Work" ToolTip="Keep both Chrome and VS Code open. Frees the least - check the headroom reading before using this with a demanding game." />
+            <Button x:Name="BtnPreWork"   Content="Work" ToolTip="Keep Chrome, Edge, Firefox and VS Code open. Frees the least - check the headroom reading before using this with a demanding game." />
             <Button x:Name="BtnPreNone"   Content="None" ToolTip="Untick everything. Nothing will be closed when you press Apply." />
           </StackPanel>
 
