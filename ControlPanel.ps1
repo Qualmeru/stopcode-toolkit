@@ -312,10 +312,8 @@ $xaml = @'
               <WrapPanel>
                 <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines. Intel's video engine is where the 0x141 faults happen, so this shows what might be triggering them." />
                 <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch the GPU for five minutes (temperature, power and throttling on NVIDIA; engine load and memory on other GPUs), and report whether any new faults occurred." />
-                <Button x:Name="BtnMonInstall"  Content="Install monitoring" Margin="0,0,8,8"
-                        ToolTip="Register both background tasks so they start at logon: the dump watcher (elevated, notifies on a bugcheck and names the driver) and the video-engine logger. Without these, a fault leaves no usable evidence behind."/>
                 <Button x:Name="BtnMonRemove"   Content="Remove monitoring" Margin="0,0,8,8"
-                        ToolTip="Unregister both background tasks. Collected data in diag is left alone."/>
+                        ToolTip="Unregister both background tasks. Collected data in diag is left alone. Installing is offered automatically when a tool needs a task that is missing."/>
               </WrapPanel>
             </StackPanel>
           </Border>
@@ -406,7 +404,7 @@ foreach ($n in @('TxtMachine','TxtCommit','TxtHead','TxtGpu','TxtFaults','BtnRef
                  'RbVr','RbFlat','BtnPreClean','BtnPreBrowse','BtnPreWork','BtnPreNone',
                  'PnlProcs','BtnApply','BtnRescan','BtnRestoreVr','TxtSel',
                  'TxtFaultDetail','BtnFaultCount','BtnFaultBaseline','BtnFaultAnalyze',
-                 'TxtMon','BtnVideoReport','BtnGpuMonitor','BtnMonInstall','BtnMonRemove',
+                 'TxtMon','BtnVideoReport','BtnGpuMonitor','BtnMonRemove',
                  'TxtDisk','BtnCleanScan','BtnCleanApply',
                  'BtnDriverScan','BtnDriverInstall','BtnDriverAge',
                  'BtnReport','BtnFolder','TxtLog','BtnClearLog','BtnCopyLog')) {
@@ -849,18 +847,68 @@ $BtnApply.Add_Click({
 $BtnRestoreVr.Add_Click({ Start-Tool 'gaming-mode.ps1' @('-Restore') -Elevated -Label 'gaming-mode -Restore' })
 $BtnFaultCount.Add_Click({ Start-Tool 'crash-count.ps1' -Label 'crash-count' })
 $BtnFaultBaseline.Add_Click({ Start-Tool 'crash-count.ps1' @('-Reset') -Label 'crash-count -Reset' })
-$BtnFaultAnalyze.Add_Click({ Start-Tool 'collect-crash.ps1' -Elevated -Label 'collect-crash' })
-$BtnVideoReport.Add_Click({ Start-Tool 'log-video-engine.ps1' @('-Report') -Label 'video-engine report' })
+$BtnFaultAnalyze.Add_Click({
+    # Same pattern as the video report: offer the missing piece rather than
+    # letting the user find out later that nothing was being recorded.
+    if (-not (Get-ScheduledTask -TaskName 'KernelDumpWatcher' -ErrorAction SilentlyContinue)) {
+        Write-Log 'dump watcher is not installed' 'warn'
+        $answer = [System.Windows.MessageBox]::Show(
+            ("The dump watcher is not installed." + [Environment]::NewLine + [Environment]::NewLine +
+             "It parses each new crash dump and tells you which driver faulted, and records live kernel events with the time they happened. Without it, a fault leaves little you can act on - and the evidence expires at the next restart." + [Environment]::NewLine + [Environment]::NewLine +
+             "Install it now? It starts at logon and needs one UAC prompt." + [Environment]::NewLine + [Environment]::NewLine +
+             "Choosing No still collects whatever dumps already exist."),
+            'Watcher not installed',
+            [System.Windows.MessageBoxButton]::YesNoCancel,
+            [System.Windows.MessageBoxImage]::Question)
+
+        if ($answer -eq [System.Windows.MessageBoxResult]::Cancel) { Write-Log 'cancelled'; return }
+        if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+            Start-Tool 'watch-dumps.ps1' @('-Install') -Label 'watcher install'
+            return
+        }
+    }
+    Start-Tool 'collect-crash.ps1' -Elevated -Label 'collect-crash'
+})
+# The report is only meaningful if something has been logging, so check the
+# task exists before opening a window that would just say "no log yet".
+$BtnVideoReport.Add_Click({
+    $task = Get-ScheduledTask -TaskName 'VideoEngineLogger' -ErrorAction SilentlyContinue
+    $csv  = Join-Path $Root 'diag\video-engine.csv'
+    $rows = 0
+    if (Test-Path $csv) { $rows = [Math]::Max(0, (Get-Content $csv -ErrorAction SilentlyContinue).Count - 1) }
+
+    if (-not $task) {
+        Write-Log 'video-engine logger is not installed' 'warn'
+        $answer = [System.Windows.MessageBox]::Show(
+            ("The video-engine logger is not installed, so there is nothing to report on yet." + [Environment]::NewLine + [Environment]::NewLine +
+             "It records which process uses which GPU's video engines, every 20 seconds. That is what identifies whatever is driving Intel's video engine when a 0x141 fault happens." + [Environment]::NewLine + [Environment]::NewLine +
+             "Install it now? It starts at logon and needs one UAC prompt."),
+            'Logger not installed',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question)
+
+        if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+            Start-Tool 'log-video-engine.ps1' @('-Install') -Label 'logger install'
+            Write-Log 'once installed, give it a while to collect before asking for a report'
+        } else {
+            Write-Log 'logger not installed - report skipped'
+        }
+        return
+    }
+
+    if ($task.State -ne 'Running') {
+        Write-Log ("logger task exists but is {0} - the report may be stale" -f $task.State) 'warn'
+    }
+    if ($rows -eq 0) {
+        Write-Log 'logger is installed but has recorded nothing yet - try again later' 'warn'
+        return
+    }
+
+    Write-Log ("opening report over {0} recorded samples" -f $rows)
+    Start-Tool 'log-video-engine.ps1' @('-Report') -Label 'video-engine report'
+})
 $BtnGpuMonitor.Add_Click({ Start-Tool 'gpu-monitor.ps1' @('-Minutes','5') -Label 'gpu-monitor' })
 
-# Both tasks in one go. The watcher self-elevates; the logger does not need to,
-# but registering a scheduled task does, so both are launched the same way.
-$BtnMonInstall.Add_Click({
-    Write-Log 'installing both monitoring tasks - expect UAC prompts' 'ok'
-    Start-Tool 'watch-dumps.ps1'      @('-Install') -Label 'watcher install'
-    Start-Tool 'log-video-engine.ps1' @('-Install') -Label 'logger install'
-    Write-Log 'press Refresh once the prompts are done to confirm both are Running'
-})
 $BtnMonRemove.Add_Click({
     Write-Log 'removing both monitoring tasks - collected data in diag is kept' 'warn'
     Start-Tool 'watch-dumps.ps1'      @('-Uninstall') -Label 'watcher remove'
