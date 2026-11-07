@@ -303,10 +303,26 @@ function Invoke-PreFlight {
     Write-Host '  Pre-flight' -ForegroundColor Cyan
     $problems = 0
 
+    # Is the target already running? If so its memory is already committed, and
+    # demanding headroom for it a second time is simply wrong.
+    $running = $null
+    if ($Target -and $Target.Exe) {
+        $leaf = [System.IO.Path]::GetFileNameWithoutExtension($Target.Exe)
+        $running = Get-Process -Name $leaf -ErrorAction SilentlyContinue | Select-Object -First 1
+    }
+
     # 1. Commit headroom against what the game actually needs.
     $c = Get-Commit
     $head = $c.LimitGB - $c.UsedGB
-    if ($Target) {
+    if ($Target -and $running) {
+        $used = [math]::Round($running.PrivateMemorySize64 / 1GB, 1)
+        if ($head -ge 4) {
+            Write-Check 'ok' 'commit headroom' ('{0} already running on {1:N1} GB; {2:N1} GB still free' -f $Target.Name, $used, $head)
+        } else {
+            Write-Check 'warn' 'commit headroom' ('{0} is running but only {1:N1} GB is left - close something' -f $Target.Name, $head)
+            $problems++
+        }
+    } elseif ($Target) {
         $need = $Target.CommitGB
         $margin = $head - $need
         if ($margin -ge 4) {
@@ -327,17 +343,48 @@ function Invoke-PreFlight {
     # 2. Is the game pinned to the discrete GPU? Witcher 3 was not, and Chrome
     #    silently ran on the integrated GPU for weeks for the same reason.
     if ($Target -and $Target.Exe) {
+        # Check the path that is actually running where possible: the profile's
+        # resolved path can differ from it (a different build, or a fallback
+        # guess), and that difference previously showed up as a bare "not set"
+        # with no way to tell which path had been looked at.
+        $checkPath = $Target.Exe
+        if ($running -and $running.Path -and $running.Path -ne $Target.Exe) {
+            $checkPath = $running.Path
+        }
         $k = 'HKCU:\SOFTWARE\Microsoft\DirectX\UserGpuPreferences'
-        $pref = (Get-ItemProperty $k -ErrorAction SilentlyContinue).($Target.Exe)
+        $props = Get-ItemProperty $k -ErrorAction SilentlyContinue
+        $pref = $null
+        if ($props) { $pref = ($props.PSObject.Properties | Where-Object { $_.Name -eq $checkPath }).Value }
+
         if ($pref -match 'GpuPreference=2') {
             Write-Check 'ok' 'GPU preference' 'pinned to the discrete GPU'
         } elseif ($pref) {
             Write-Check 'warn' 'GPU preference' ('set to "{0}" - not high performance' -f $pref)
             $problems++
         } else {
-            Write-Check 'warn' 'GPU preference' 'not set - Windows decides, which has picked the iGPU before'
-            Write-Host ('           fix: .\gaming-mode.ps1 -Game {0} -PinGpu' -f $Target.Key) -ForegroundColor DarkGray
+            Write-Check 'warn' 'GPU preference' 'not set for the executable checked'
+            Write-Host ('           checked: {0}' -f $checkPath) -ForegroundColor DarkGray
+            Write-Host ('           fix:     .\gaming-mode.ps1 -Game {0} -PinGpu' -f $Target.Key) -ForegroundColor DarkGray
             $problems++
+        }
+
+        # The preference only decides what Windows hands out at launch; if the
+        # game is already running, say where it actually ended up.
+        if ($running) {
+            try {
+                $map = Get-AdapterMap
+                $onNv = $false; $onIntel = $false
+                (Get-Counter '\GPU Engine(*)\Utilization Percentage' -ErrorAction SilentlyContinue).CounterSamples |
+                    Where-Object { $_.CookedValue -gt 1 -and $_.InstanceName -match ('pid_' + $running.Id + '_') } |
+                    ForEach-Object {
+                        if ($_.InstanceName -match 'luid_0x[0-9a-f]+_(0x[0-9a-f]+)_') {
+                            $ad = if ($map.ContainsKey($matches[1])) { $map[$matches[1]] } else { '' }
+                            if ($ad -match 'NVIDIA') { $onNv = $true } elseif ($ad -match 'Intel') { $onIntel = $true }
+                        }
+                    }
+                if ($onNv)        { Write-Check 'ok'   'running on' 'the discrete GPU, measured' }
+                elseif ($onIntel) { Write-Check 'fail' 'running on' 'the integrated GPU - restart it after pinning'; $problems++ }
+            } catch { }
         }
     }
 
@@ -745,7 +792,9 @@ $c = Get-Commit
 $head = $c.LimitGB - $c.UsedGB
 Write-Host ('  {0,-10} {1,5:N1} GB of headroom' -f 'free', $head) -ForegroundColor $(if ($head -lt 10) { 'Yellow' } else { 'Green' })
 
-if (-not $WhatIf -and -not $NoPreflight) {
+# The pre-flight only reads, so it runs under -WhatIf too - that is the mode
+# you want when checking whether a session is ready without changing anything.
+if (-not $NoPreflight) {
     $issues = Invoke-PreFlight -Target $Target -WantVr ([bool]$VR)
 } else {
     $issues = 0
