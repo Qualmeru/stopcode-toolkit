@@ -20,6 +20,10 @@
         .\gaming-mode.ps1 -Flat -Preset browse keep Chrome, close the rest
         .\gaming-mode.ps1 -Flat -Keep chrome,Discord   spare these whatever else is picked
         .\gaming-mode.ps1 -Flat -PowerPlan     also switch the power plan
+        .\gaming-mode.ps1 -Game witcher3       target a game: sets VR/flat, checks
+                                               its GPU pinning and headroom need
+        .\gaming-mode.ps1 -Game alyx -Launch   prepare, check, then start it
+        .\gaming-mode.ps1 -Games               list the games it can see
 #>
 
 [CmdletBinding()]
@@ -33,8 +37,100 @@ param(
     [ValidateSet('clean','browse','work')]
     [string]$Preset,
     [string[]]$Keep,
+    [string]$Game,
+    [switch]$Games,
+    [switch]$Launch,
+    [switch]$PinGpu,
+    [switch]$NoPreflight,
     [int]$MinimumMB = 150
 )
+
+# --------------------------------------------------------------- game profiles
+# Steam libraries are read from libraryfolders.vdf rather than hardcoded, since
+# this machine keeps games on two drives.
+function Get-SteamLibraries {
+    $libs = @()
+    foreach ($root in @('C:\Games\Steam', 'C:\Program Files (x86)\Games\Steam',
+                        'C:\Program Files (x86)\Steam', "$env:ProgramFiles\Steam")) {
+        $vdf = Join-Path $root 'steamapps\libraryfolders.vdf'
+        if (-not (Test-Path $vdf)) { continue }
+        $libs += $root
+        foreach ($line in (Get-Content $vdf -ErrorAction SilentlyContinue)) {
+            if ($line -match '"path"\s+"([^"]+)"') {
+                $libs += ($matches[1] -replace '\\\\', '\')
+            }
+        }
+    }
+    return @($libs | Select-Object -Unique | Where-Object { Test-Path $_ })
+}
+
+# CommitGB: only Witcher 3 is a measured figure (observed at ~10 GB during an
+# exhaustion event). The rest are rough classes, flagged as estimates, because
+# guessing precisely would be worse than admitting the uncertainty.
+$GameProfiles = @(
+    [pscustomobject]@{ Key='witcher3'; Name='The Witcher 3';     Folder='The Witcher 3';   Exe='bin\x64_dx12\witcher3.exe';     VR=$false; CommitGB=10; Measured=$true  }
+    [pscustomobject]@{ Key='alyx';     Name='Half-Life: Alyx';   Folder='Half-Life Alyx';  Exe='game\bin\win64\hlvr.exe';       VR=$true;  CommitGB=8;  Measured=$false }
+    [pscustomobject]@{ Key='cyberpunk';Name='Cyberpunk 2077';    Folder='Cyberpunk 2077';  Exe='bin\x64\Cyberpunk2077.exe';     VR=$false; CommitGB=9;  Measured=$false }
+    [pscustomobject]@{ Key='skyrim';   Name='Skyrim SE';         Folder='Skyrim Special Edition'; Exe='SkyrimSE.exe';           VR=$false; CommitGB=5;  Measured=$false }
+    [pscustomobject]@{ Key='pragmata'; Name='PRAGMATA';          Folder='PRAGMATA';        Exe=$null;                           VR=$false; CommitGB=8;  Measured=$false }
+    [pscustomobject]@{ Key='winds';    Name='Where Winds Meet';  Folder='Where Winds Meet';Exe=$null;                           VR=$false; CommitGB=8;  Measured=$false }
+    [pscustomobject]@{ Key='outerwilds';Name='Outer Wilds';      Folder='Outer Wilds';     Exe='OuterWilds.exe';                VR=$false; CommitGB=3;  Measured=$false }
+    [pscustomobject]@{ Key='stray';    Name='Stray';             Folder='Stray';           Exe=$null;                           VR=$false; CommitGB=4;  Measured=$false }
+    [pscustomobject]@{ Key='falloutnv';Name='Fallout: New Vegas';Folder='Fallout New Vegas';Exe=$null;                          VR=$false; CommitGB=2;  Measured=$false }
+)
+
+function Resolve-GameProfile {
+    param($Profile, [string[]]$Libraries)
+    foreach ($lib in $Libraries) {
+        $dir = Join-Path $lib ('steamapps\common\' + $Profile.Folder)
+        if (-not (Test-Path $dir)) { continue }
+        $exe = $null
+        if ($Profile.Exe) {
+            $cand = Join-Path $dir $Profile.Exe
+            if (Test-Path $cand) { $exe = $cand }
+        }
+        if (-not $exe) {
+            # Fall back to the largest executable in the folder tree, which is
+            # almost always the game rather than a launcher or crash handler.
+            $exe = Get-ChildItem $dir -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue -Depth 4 |
+                   Where-Object { $_.Name -notmatch 'unins|crash|redist|vcredist|launcher|setup|helper' } |
+                   Sort-Object Length -Descending | Select-Object -First 1 -ExpandProperty FullName
+        }
+        return [pscustomobject]@{
+            Key = $Profile.Key; Name = $Profile.Name; Dir = $dir; Exe = $exe
+            VR = $Profile.VR; CommitGB = $Profile.CommitGB; Measured = $Profile.Measured
+        }
+    }
+    return $null
+}
+
+function Get-InstalledGames {
+    $libs = Get-SteamLibraries
+    $out = @()
+    foreach ($p in $GameProfiles) {
+        $r = Resolve-GameProfile -Profile $p -Libraries $libs
+        if ($r) { $out += $r }
+    }
+    return $out
+}
+
+if ($Games) {
+    Write-Host ''
+    Write-Host '  Games this script can see' -ForegroundColor Cyan
+    Write-Host ''
+    Write-Host '    key          game                   type   needs    exe found'
+    Write-Host '    -----------  ---------------------  -----  -------  ---------'
+    foreach ($g in (Get-InstalledGames)) {
+        $need = '{0} GB{1}' -f $g.CommitGB, $(if ($g.Measured) { '*' } else { '' })
+        Write-Host ('    {0,-11}  {1,-21}  {2,-5}  {3,-7}  {4}' -f `
+            $g.Key, $g.Name, $(if ($g.VR) { 'VR' } else { 'flat' }), $need,
+            $(if ($g.Exe) { 'yes' } else { 'no' }))
+    }
+    Write-Host ''
+    Write-Host '    * measured. Others are estimates - treat them as rough.' -ForegroundColor DarkGray
+    Write-Host ''
+    return
+}
 
 # Keep-presets: start from the recommended set, then spare the named processes.
 # Chrome and VS Code are ~10 GB of the ~15 GB the recommended set frees, so they
@@ -52,6 +148,40 @@ $stateFile = Join-Path $PSScriptRoot 'diag\gaming-mode-state.json'
 # two. Split it here so both invocation styles behave the same.
 if ($Keep) {
     $Keep = @($Keep -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+# ------------------------------------------------------- stubborn processes
+# Three different reasons something "will not close", each needing a different
+# answer:
+#   1. it is a Windows service      -> Stop-Process cannot touch it; stop the service
+#   2. it respawns instantly        -> killing it achieves nothing
+#   3. it did close, just slowly    -> the old check simply looked too early
+# Names that genuinely refuse are remembered here and skipped next time.
+$wontCloseFile = Join-Path $PSScriptRoot 'diag\wont-close.txt'
+
+function Get-WontClose {
+    if (Test-Path $wontCloseFile) {
+        return @(Get-Content $wontCloseFile -ErrorAction SilentlyContinue |
+                 ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    return @()
+}
+
+function Add-WontClose {
+    param([string]$Name)
+    $all = @(Get-WontClose) + $Name | Select-Object -Unique
+    New-Item -ItemType Directory -Path (Split-Path $wontCloseFile) -Force | Out-Null
+    Set-Content -LiteralPath $wontCloseFile -Value $all -Encoding utf8
+}
+
+# Map process id -> service name, so service-backed processes can be identified
+# before anything pointless is attempted on them.
+function Get-ServiceProcessMap {
+    $m = @{}
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessId -gt 0 } |
+        ForEach-Object { $m[[int]$_.ProcessId] = $_.Name }
+    return $m
 }
 
 # --------------------------------------------------------------- protected set
@@ -139,6 +269,128 @@ function Test-Admin {
         [Security.Principal.WindowsBuiltinRole]::Administrator)
 }
 
+# ----------------------------------------------------------------- pre-flight
+# Every check here corresponds to something that has actually gone wrong on this
+# machine, rather than generic advice.
+
+function Write-Check {
+    param([string]$State, [string]$What, [string]$Detail)
+    $mark, $col = switch ($State) {
+        'ok'   { '  ok  ', 'Green' }
+        'warn' { ' warn ', 'Yellow' }
+        'fail' { ' FAIL ', 'Red' }
+        default { '  --  ', 'DarkGray' }
+    }
+    Write-Host ('   [' + $mark + '] ') -NoNewline -ForegroundColor $col
+    Write-Host ('{0,-26} {1}' -f $What, $Detail)
+}
+
+function Get-AdapterMap {
+    $m = @{}
+    Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\DirectX' -ErrorAction SilentlyContinue | ForEach-Object {
+        $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+        if ($p.Description -and $p.AdapterLuid) {
+            $m['0x{0:x8}' -f ($p.AdapterLuid -band 0xFFFFFFFF)] = $p.Description
+        }
+    }
+    return $m
+}
+
+function Invoke-PreFlight {
+    param($Target, [bool]$WantVr)
+
+    Write-Host ''
+    Write-Host '  Pre-flight' -ForegroundColor Cyan
+    $problems = 0
+
+    # 1. Commit headroom against what the game actually needs.
+    $c = Get-Commit
+    $head = $c.LimitGB - $c.UsedGB
+    if ($Target) {
+        $need = $Target.CommitGB
+        $margin = $head - $need
+        if ($margin -ge 4) {
+            Write-Check 'ok' 'commit headroom' ('{0:N1} GB free, {1} needs ~{2} GB' -f $head, $Target.Name, $need)
+        } elseif ($margin -ge 0) {
+            Write-Check 'warn' 'commit headroom' ('{0:N1} GB free, {1} needs ~{2} GB - only {3:N1} GB spare' -f $head, $Target.Name, $need, $margin)
+            $problems++
+        } else {
+            Write-Check 'fail' 'commit headroom' ('{0:N1} GB free but {1} needs ~{2} GB - close more' -f $head, $Target.Name, $need)
+            $problems++
+        }
+    } else {
+        $state = if ($head -ge 14) { 'ok' } elseif ($head -ge 10) { 'warn' } else { 'fail' }
+        Write-Check $state 'commit headroom' ('{0:N1} GB free of {1:N1} GB' -f $head, $c.LimitGB)
+        if ($state -ne 'ok') { $problems++ }
+    }
+
+    # 2. Is the game pinned to the discrete GPU? Witcher 3 was not, and Chrome
+    #    silently ran on the integrated GPU for weeks for the same reason.
+    if ($Target -and $Target.Exe) {
+        $k = 'HKCU:\SOFTWARE\Microsoft\DirectX\UserGpuPreferences'
+        $pref = (Get-ItemProperty $k -ErrorAction SilentlyContinue).($Target.Exe)
+        if ($pref -match 'GpuPreference=2') {
+            Write-Check 'ok' 'GPU preference' 'pinned to the discrete GPU'
+        } elseif ($pref) {
+            Write-Check 'warn' 'GPU preference' ('set to "{0}" - not high performance' -f $pref)
+            $problems++
+        } else {
+            Write-Check 'warn' 'GPU preference' 'not set - Windows decides, which has picked the iGPU before'
+            Write-Host ('           fix: .\gaming-mode.ps1 -Game {0} -PinGpu' -f $Target.Key) -ForegroundColor DarkGray
+            $problems++
+        }
+    }
+
+    # 3. VR stack state should match the kind of session.
+    $vrRunning = [bool](@(Get-VrProcesses).Count)
+    if ($WantVr -and $vrRunning)        { Write-Check 'ok'   'VR stack' 'running, as needed' }
+    elseif ($WantVr -and -not $vrRunning){ Write-Check 'warn' 'VR stack' 'not running yet - Apply will start it' }
+    elseif (-not $WantVr -and $vrRunning){ Write-Check 'warn' 'VR stack' 'still running for a flat game - wasting CPU'; $problems++ }
+    else                                 { Write-Check 'ok'   'VR stack' 'stopped, as it should be' }
+
+    # 4. Anything driving Intel's video engine - the block igdkmd64.sys times
+    #    out in, and the cause of the 0x141 faults.
+    try {
+        $map = Get-AdapterMap
+        $busy = @()
+        (Get-Counter '\GPU Engine(*)\Utilization Percentage' -ErrorAction SilentlyContinue).CounterSamples |
+            Where-Object { $_.CookedValue -gt 1 -and $_.InstanceName -match 'videodecode|videoencode|videoprocessing' } |
+            ForEach-Object {
+                if ($_.InstanceName -match 'pid_(\d+)_luid_0x[0-9a-f]+_(0x[0-9a-f]+)_') {
+                    $ad = if ($map.ContainsKey($matches[2])) { $map[$matches[2]] } else { '' }
+                    if ($ad -match 'Intel') {
+                        $pr = Get-Process -Id $matches[1] -ErrorAction SilentlyContinue
+                        if ($pr) { $busy += $pr.ProcessName }
+                    }
+                }
+            }
+        $busy = @($busy | Select-Object -Unique)
+        if ($busy) {
+            Write-Check 'warn' 'Intel video engine' ('in use by {0} - this is where 0x141 faults happen' -f ($busy -join ', '))
+            $problems++
+        } else {
+            Write-Check 'ok' 'Intel video engine' 'idle'
+        }
+    } catch { }
+
+    # 5. Disk space on the drive the game lives on.
+    if ($Target -and $Target.Dir) {
+        $drv = Get-PSDrive -Name ($Target.Dir.Substring(0,1)) -ErrorAction SilentlyContinue
+        if ($drv) {
+            $free = $drv.Free / 1GB
+            $state = if ($free -ge 20) { 'ok' } elseif ($free -ge 8) { 'warn' } else { 'fail' }
+            Write-Check $state 'disk space' ('{0:N0} GB free on {1}:' -f $free, $drv.Name)
+            if ($state -eq 'fail') { $problems++ }
+        }
+    }
+
+    Write-Host ''
+    if ($problems -eq 0) { Write-Host '   Nothing to flag.' -ForegroundColor Green }
+    else { Write-Host ("   {0} thing(s) worth a look above." -f $problems) -ForegroundColor Yellow }
+    Write-Host ''
+    return $problems
+}
+
 # --------------------------------------------------------------------- restore
 
 if ($Restore) {
@@ -170,6 +422,42 @@ if ($Restore) {
 }
 
 # ------------------------------------------------------------------ mode choice
+
+# A named game decides VR vs flat on its own, so the prompt is skipped.
+$Target = $null
+if ($Game) {
+    $Target = Get-InstalledGames | Where-Object { $_.Key -eq $Game -or $_.Name -like "*$Game*" } | Select-Object -First 1
+    if (-not $Target) {
+        Write-Host ''
+        Write-Host ("  No installed game matches '{0}'. Run -Games to list them." -f $Game) -ForegroundColor Yellow
+        Write-Host ''
+        return
+    }
+    if ($Target.VR) { $VR = $true; $Flat = $false } else { $Flat = $true; $VR = $false }
+    Write-Host ''
+    Write-Host ('  Target: {0}  ({1} session, needs ~{2} GB{3})' -f `
+        $Target.Name, $(if ($Target.VR) { 'VR' } else { 'flat' }), $Target.CommitGB,
+        $(if ($Target.Measured) { ', measured' } else { ', estimated' })) -ForegroundColor Cyan
+}
+
+# -PinGpu sets the per-app preference the pre-flight check looks for.
+if ($PinGpu) {
+    if (-not $Target -or -not $Target.Exe) {
+        Write-Host '  -PinGpu needs -Game with a resolvable executable.' -ForegroundColor Yellow
+        return
+    }
+    $k = 'HKCU:\SOFTWARE\Microsoft\DirectX\UserGpuPreferences'
+    if (-not (Test-Path $k)) {
+        # Note: New-Item -Force on an existing registry key DELETES its values,
+        # so only create it when it genuinely does not exist.
+        New-Item -Path $k -Force | Out-Null
+    }
+    Set-ItemProperty -Path $k -Name $Target.Exe -Value 'GpuPreference=2;' -Type String
+    Write-Host ('  pinned {0} to the discrete GPU' -f $Target.Name) -ForegroundColor Green
+    Write-Host ('    {0}' -f $Target.Exe) -ForegroundColor DarkGray
+    Write-Host ''
+    return
+}
 
 if (-not $VR -and -not $Flat) {
     Write-Host ''
@@ -264,7 +552,17 @@ $cands = Get-Process -ErrorAction SilentlyContinue |
 if (-not $cands) {
     Write-Host '  Nothing above the size threshold is running.' -ForegroundColor Green
 } else {
-    $recMB = (($cands | Where-Object { $Recommend.ContainsKey($_.Name) } | Measure-Object CommitMB -Sum).Sum)
+    # Anything that has proved it will not close is shown but never auto-ticked,
+    # so presets stop wasting time on it.
+    $stubborn = @(Get-WontClose)
+    $svcMapUi = Get-ServiceProcessMap
+    foreach ($c in $cands) {
+        $isSvc = @($c.Ids | Where-Object { $svcMapUi.ContainsKey($_) }).Count -gt 0
+        Add-Member -InputObject $c -NotePropertyName Stubborn -NotePropertyValue ($stubborn -contains $c.Name) -Force
+        Add-Member -InputObject $c -NotePropertyName IsService -NotePropertyValue $isSvc -Force
+    }
+
+    $recMB = (($cands | Where-Object { $Recommend.ContainsKey($_.Name) -and -not $_.Stubborn } | Measure-Object CommitMB -Sum).Sum)
     if (-not $recMB) { $recMB = 0 }
 
     Write-Host ('  Heavy processes (over {0} MB). Pick what to close:' -f $MinimumMB) -ForegroundColor Cyan
@@ -273,11 +571,13 @@ if (-not $cands) {
     Write-Host '    - --  -----------------------  ----  -------   ----------------------------------'
     for ($i = 0; $i -lt $cands.Count; $i++) {
         $c = $cands[$i]
-        $isRec = $Recommend.ContainsKey($c.Name)
-        if ($isRec)                            { $note = $Recommend[$c.Name]; $col = 'Green' }
+        $isRec = $Recommend.ContainsKey($c.Name) -and -not $c.Stubborn
+        if ($c.Stubborn)                       { $note = 'skipped - would not close before'; $col = 'DarkGray' }
+        elseif ($c.IsService)                  { $note = 'service - needs an elevated run to stop'; $col = 'DarkCyan' }
+        elseif ($isRec)                        { $note = $Recommend[$c.Name]; $col = 'Green' }
         elseif ($Caution.ContainsKey($c.Name)) { $note = 'keep? ' + $Caution[$c.Name]; $col = 'Yellow' }
         else                                   { $note = ''; $col = 'Gray' }
-        $mark = if ($isRec) { '*' } else { ' ' }
+        $mark = if ($isRec) { '*' } elseif ($c.Stubborn) { 'x' } else { ' ' }
         $gb = if ($c.CommitMB -ge 1024) { '{0,5:N1} GB' -f ($c.CommitMB/1024) } else { '{0,5} MB' -f $c.CommitMB }
         Write-Host ('    {0} {1,2}  {2,-23}  {3,4}  {4}   {5}' -f $mark, ($i+1), $c.Name, $c.Count, $gb, $note) -ForegroundColor $col
     }
@@ -285,7 +585,9 @@ if (-not $cands) {
     function Get-PresetSet {
         param([string[]]$KeepNames)
         @($cands | Where-Object {
-            $Recommend.ContainsKey($_.Name) -and ($KeepNames -notcontains $_.Name)
+            $Recommend.ContainsKey($_.Name) -and
+            ($KeepNames -notcontains $_.Name) -and
+            -not $_.Stubborn
         })
     }
     function Get-SetGB {
@@ -348,11 +650,34 @@ if (-not $cands) {
         Write-Host '  Nothing selected.' -ForegroundColor DarkGray
     } else {
         Write-Host ''
+        $svcMap = Get-ServiceProcessMap
+        $admin  = Test-Admin
+
         foreach ($c in $chosen) {
             if ($WhatIf) {
                 Write-Host ('    WOULD CLOSE {0} ({1} proc, {2} MB)' -f $c.Name, $c.Count, $c.CommitMB) -ForegroundColor Yellow
                 continue
             }
+
+            # Service-backed: Stop-Process is the wrong tool and will just fail.
+            $svcNames = @($c.Ids | Where-Object { $svcMap.ContainsKey($_) } | ForEach-Object { $svcMap[$_] } | Select-Object -Unique)
+            if ($svcNames) {
+                if (-not $admin) {
+                    Write-Host ('    skipped {0,-22} is a service ({1}) - needs an elevated run' -f $c.Name, ($svcNames -join ', ')) -ForegroundColor Yellow
+                    continue
+                }
+                foreach ($s in $svcNames) {
+                    try {
+                        Stop-Service -Name $s -Force -ErrorAction Stop
+                        Write-Host ('    stopped {0,-22} service {1}, freed ~{2} MB' -f $c.Name, $s, $c.CommitMB) -ForegroundColor Green
+                    } catch {
+                        Write-Host ('    {0}: could not stop service {1}' -f $c.Name, $s) -ForegroundColor Yellow
+                        Add-WontClose $c.Name
+                    }
+                }
+                continue
+            }
+
             # Ask politely first so apps can save; force only what ignores it.
             foreach ($procId in $c.Ids) {
                 $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
@@ -365,9 +690,27 @@ if (-not $cands) {
                 $left = @($c.Ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
                 foreach ($p in $left) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
             }
+
+            # Give Windows a moment to actually reap them. The previous version
+            # counted immediately and reported failures for apps that were in
+            # fact closing - Signal and the Snipping Tool among them.
+            Start-Sleep -Milliseconds 900
             $still = @($c.Ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count
-            if ($still -eq 0) { Write-Host ('    closed  {0,-22} freed ~{1} MB' -f $c.Name, $c.CommitMB) -ForegroundColor Green }
-            else { Write-Host ('    {0}: {1} process(es) would not close' -f $c.Name, $still) -ForegroundColor Yellow }
+
+            if ($still -eq 0) {
+                Write-Host ('    closed  {0,-22} freed ~{1} MB' -f $c.Name, $c.CommitMB) -ForegroundColor Green
+                continue
+            }
+
+            # Still there: either it is being respawned by a parent, or it is
+            # protected. Either way, stop trying on future runs.
+            $respawned = @(Get-Process -Name $c.Name -ErrorAction SilentlyContinue).Count
+            if ($respawned -gt 0) {
+                Write-Host ('    {0}: respawns immediately - skipping it from now on' -f $c.Name) -ForegroundColor Yellow
+            } else {
+                Write-Host ('    {0}: {1} process(es) refused to close' -f $c.Name, $still) -ForegroundColor Yellow
+            }
+            Add-WontClose $c.Name
         }
     }
 }
@@ -401,11 +744,34 @@ Show-Commit 'after'
 $c = Get-Commit
 $head = $c.LimitGB - $c.UsedGB
 Write-Host ('  {0,-10} {1,5:N1} GB of headroom' -f 'free', $head) -ForegroundColor $(if ($head -lt 10) { 'Yellow' } else { 'Green' })
-if ($head -lt 12) {
-    Write-Host ''
+
+if (-not $WhatIf -and -not $NoPreflight) {
+    $issues = Invoke-PreFlight -Target $Target -WantVr ([bool]$VR)
+} else {
+    $issues = 0
+}
+
+if (-not $Target -and $head -lt 12) {
     Write-Host '  WARNING: Witcher 3 alone commits ~10 GB. Under 12 GB free is where' -ForegroundColor Yellow
     Write-Host '           this machine has previously exhausted commit and killed dwm.' -ForegroundColor Yellow
+    Write-Host ''
 }
-Write-Host ''
+
+if ($Launch -and $Target -and -not $WhatIf) {
+    if (-not $Target.Exe) {
+        Write-Host '  Cannot launch: no executable resolved for this game.' -ForegroundColor Yellow
+    } else {
+        if ($issues -gt 0) {
+            Write-Host ('  {0} pre-flight item(s) flagged above.' -f $issues) -ForegroundColor Yellow
+            $go = Read-Host '  Launch anyway? [y/N]'
+            if ($go -notmatch '^\s*(y|yes)\s*$') { Write-Host '  Not launched.' -ForegroundColor Yellow; return }
+        }
+        Write-Host ('  Launching {0}...' -f $Target.Name) -ForegroundColor Green
+        try { Start-Process -FilePath $Target.Exe -WorkingDirectory (Split-Path $Target.Exe) }
+        catch { Write-Host ('  Launch failed: {0}' -f $_.Exception.Message) -ForegroundColor Red }
+    }
+    Write-Host ''
+}
+
 Write-Host '  Afterwards:  .\gaming-mode.ps1 -Restore' -ForegroundColor DarkGray
 Write-Host ''
