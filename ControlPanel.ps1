@@ -431,6 +431,39 @@ function Write-Log {
     $script:TxtLog.ScrollToEnd()
 }
 
+# Names that have proved they will not close, remembered between runs so the
+# presets stop wasting attempts on them. Shared with gaming-mode.ps1.
+$script:WontCloseFile = Join-Path $Root 'diag\wont-close.txt'
+
+function Get-WontClose {
+    if (Test-Path $script:WontCloseFile) {
+        return @(Get-Content $script:WontCloseFile -ErrorAction SilentlyContinue |
+                 ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    return @()
+}
+
+function Add-WontClose {
+    param([string]$Name)
+    $all = @(Get-WontClose) + $Name | Select-Object -Unique
+    New-Item -ItemType Directory -Path (Split-Path $script:WontCloseFile) -Force | Out-Null
+    Set-Content -LiteralPath $script:WontCloseFile -Value $all -Encoding utf8
+}
+
+function Test-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
+        [Security.Principal.WindowsBuiltinRole]::Administrator)
+}
+
+function Get-ServiceProcessMap {
+    $m = @{}
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessId -gt 0 } |
+        ForEach-Object { $m[[int]$_.ProcessId] = $_.Name }
+    return $m
+}
+
 function Get-Commit {
     try {
         $s = (Get-Counter '\Memory\Committed Bytes','\Memory\Commit Limit' -ErrorAction Stop).CounterSamples
@@ -610,9 +643,16 @@ function Build-ProcessList {
         Where-Object { $_.CommitMB -ge 150 } |
         Sort-Object CommitMB -Descending
 
+    $stubborn = @(Get-WontClose)
+    $svcMapUi = Get-ServiceProcessMap
+
     foreach ($c in $cands) {
-        $isRec = $Recommend.ContainsKey($c.Name)
-        $note  = if ($isRec) { $Recommend[$c.Name] }
+        $isStubborn = $stubborn -contains $c.Name
+        $isService  = @($c.Ids | Where-Object { $svcMapUi.ContainsKey($_) }).Count -gt 0
+        $isRec = $Recommend.ContainsKey($c.Name) -and -not $isStubborn
+        $note  = if ($isStubborn) { 'skipped - would not close before' }
+                 elseif ($isService) { 'service - needs the panel run as admin' }
+                 elseif ($isRec) { $Recommend[$c.Name] }
                  elseif ($Caution.ContainsKey($c.Name)) { 'keep? ' + $Caution[$c.Name] }
                  else { '' }
 
@@ -655,8 +695,13 @@ function Build-ProcessList {
             if ($mono) { $t.FontFamily = 'Consolas' }
             $t
         }
-        $nameCol = if ($isRec) { '#5BC08C' } elseif ($Caution.ContainsKey($c.Name)) { '#E0A93A' } else { '#E7ECF3' }
-        $t1 = & $mk ($(if ($isRec) { '* ' } else { '  ' }) + $c.Name) $nameCol 12 $true
+        $nameCol = if ($isStubborn) { '#78838F' }
+                   elseif ($isService) { '#4FB8C0' }
+                   elseif ($isRec) { '#5BC08C' }
+                   elseif ($Caution.ContainsKey($c.Name)) { '#E0A93A' }
+                   else { '#E7ECF3' }
+        $prefix = if ($isRec) { '* ' } elseif ($isStubborn) { 'x ' } else { '  ' }
+        $t1 = & $mk ($prefix + $c.Name) $nameCol 12 $true
         $t2 = & $mk ('x' + $c.Count) '#78838F' 11 $true
         $sz = if ($c.CommitMB -ge 1024) { '{0:N1} GB' -f ($c.CommitMB/1024) } else { '{0} MB' -f $c.CommitMB }
         $t3 = & $mk $sz '#9EA9B8' 11.5 $true
@@ -735,20 +780,57 @@ $BtnApply.Add_Click({
     if (-not $sel) { Write-Log 'nothing selected to close'; Update-Status -IncludeSlow; return }
 
     $before = Get-Commit
+    $svcMap = Get-ServiceProcessMap
+    $admin  = Test-Admin
+
+    # Service-backed processes cannot be closed with Stop-Process; separate them
+    # out before wasting an attempt and reporting a failure that was never going
+    # to succeed.
+    $plain = @()
     foreach ($r in $sel) {
-        $c = $r.Info
-        foreach ($procId in $c.Ids) {
+        $svcNames = @($r.Info.Ids | Where-Object { $svcMap.ContainsKey($_) } | ForEach-Object { $svcMap[$_] } | Select-Object -Unique)
+        if (-not $svcNames) { $plain += $r; continue }
+        if (-not $admin) {
+            Write-Log ("{0} is a service ({1}) - skipped, needs an elevated run" -f $r.Info.Name, ($svcNames -join ', ')) 'warn'
+            continue
+        }
+        foreach ($s in $svcNames) {
+            try {
+                Stop-Service -Name $s -Force -ErrorAction Stop
+                Write-Log ("stopped service {0} ({1}, ~{2} MB)" -f $s, $r.Info.Name, $r.Info.CommitMB) 'ok'
+            } catch {
+                Write-Log ("could not stop service {0}" -f $s) 'warn'
+                Add-WontClose $r.Info.Name
+            }
+        }
+    }
+
+    foreach ($r in $plain) {
+        foreach ($procId in $r.Info.Ids) {
             $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
             if ($p) { try { [void]$p.CloseMainWindow() } catch { } }
         }
     }
     Start-Sleep -Milliseconds 1800
-    foreach ($r in $sel) {
+    foreach ($r in $plain) {
         $left = @($r.Info.Ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
         foreach ($p in $left) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+    # Let Windows reap them before counting. Checking immediately reported
+    # failures for apps that were in fact closing.
+    Start-Sleep -Milliseconds 900
+    foreach ($r in $plain) {
         $still = @($r.Info.Ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count
-        if ($still -eq 0) { Write-Log ("closed {0} (~{1} MB)" -f $r.Info.Name, $r.Info.CommitMB) 'ok' }
-        else { Write-Log ("{0}: {1} process(es) would not close" -f $r.Info.Name, $still) 'warn' }
+        if ($still -eq 0) {
+            Write-Log ("closed {0} (~{1} MB)" -f $r.Info.Name, $r.Info.CommitMB) 'ok'
+            continue
+        }
+        if (@(Get-Process -Name $r.Info.Name -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Log ("{0} respawns immediately - skipping it from now on" -f $r.Info.Name) 'warn'
+        } else {
+            Write-Log ("{0}: {1} process(es) refused to close" -f $r.Info.Name, $still) 'warn'
+        }
+        Add-WontClose $r.Info.Name
     }
     Start-Sleep -Milliseconds 800
     $after = Get-Commit
