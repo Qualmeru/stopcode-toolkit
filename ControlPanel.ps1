@@ -312,6 +312,10 @@ $xaml = @'
               <WrapPanel>
                 <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines. Intel's video engine is where the 0x141 faults happen, so this shows what might be triggering them." />
                 <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch the GPU for five minutes (temperature, power and throttling on NVIDIA; engine load and memory on other GPUs), and report whether any new faults occurred." />
+                <Button x:Name="BtnMonInstall"  Content="Install monitoring" Margin="0,0,8,8"
+                        ToolTip="Register both background tasks so they start at logon: the dump watcher (elevated, notifies on a bugcheck and names the driver) and the video-engine logger. Without these, a fault leaves no usable evidence behind."/>
+                <Button x:Name="BtnMonRemove"   Content="Remove monitoring" Margin="0,0,8,8"
+                        ToolTip="Unregister both background tasks. Collected data in diag is left alone."/>
               </WrapPanel>
             </StackPanel>
           </Border>
@@ -402,7 +406,7 @@ foreach ($n in @('TxtMachine','TxtCommit','TxtHead','TxtGpu','TxtFaults','BtnRef
                  'RbVr','RbFlat','BtnPreClean','BtnPreBrowse','BtnPreWork','BtnPreNone',
                  'PnlProcs','BtnApply','BtnRescan','BtnRestoreVr','TxtSel',
                  'TxtFaultDetail','BtnFaultCount','BtnFaultBaseline','BtnFaultAnalyze',
-                 'TxtMon','BtnVideoReport','BtnGpuMonitor',
+                 'TxtMon','BtnVideoReport','BtnGpuMonitor','BtnMonInstall','BtnMonRemove',
                  'TxtDisk','BtnCleanScan','BtnCleanApply',
                  'BtnDriverScan','BtnDriverInstall','BtnDriverAge',
                  'BtnReport','BtnFolder','TxtLog','BtnClearLog','BtnCopyLog')) {
@@ -848,6 +852,20 @@ $BtnFaultBaseline.Add_Click({ Start-Tool 'crash-count.ps1' @('-Reset') -Label 'c
 $BtnFaultAnalyze.Add_Click({ Start-Tool 'collect-crash.ps1' -Elevated -Label 'collect-crash' })
 $BtnVideoReport.Add_Click({ Start-Tool 'log-video-engine.ps1' @('-Report') -Label 'video-engine report' })
 $BtnGpuMonitor.Add_Click({ Start-Tool 'gpu-monitor.ps1' @('-Minutes','5') -Label 'gpu-monitor' })
+
+# Both tasks in one go. The watcher self-elevates; the logger does not need to,
+# but registering a scheduled task does, so both are launched the same way.
+$BtnMonInstall.Add_Click({
+    Write-Log 'installing both monitoring tasks - expect UAC prompts' 'ok'
+    Start-Tool 'watch-dumps.ps1'      @('-Install') -Label 'watcher install'
+    Start-Tool 'log-video-engine.ps1' @('-Install') -Label 'logger install'
+    Write-Log 'press Refresh once the prompts are done to confirm both are Running'
+})
+$BtnMonRemove.Add_Click({
+    Write-Log 'removing both monitoring tasks - collected data in diag is kept' 'warn'
+    Start-Tool 'watch-dumps.ps1'      @('-Uninstall') -Label 'watcher remove'
+    Start-Tool 'log-video-engine.ps1' @('-Uninstall') -Label 'logger remove'
+})
 $BtnDriverScan.Add_Click({ Start-Tool 'driver-check.ps1' -Label 'driver scan' })
 $BtnDriverInstall.Add_Click({ Start-Tool 'driver-check.ps1' @('-Install') -Label 'driver install' })
 $BtnDriverAge.Add_Click({ Start-Tool 'driver-check.ps1' @('-Inventory') -Label 'driver inventory' })
