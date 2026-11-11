@@ -15,7 +15,8 @@
         .\log-video-engine.ps1 -Uninstall    remove the scheduled task
         .\log-video-engine.ps1 -Once         print one sample and exit
         .\log-video-engine.ps1               run in the foreground
-        .\log-video-engine.ps1 -Report       summarise what the log holds
+        .\log-video-engine.ps1 -Report       summarise what the log holds (with no
+                                             log yet, samples live for 60s first)
         .\log-video-engine.ps1 -Around '2026-11-05 22:17'   show +/- 5 min
 #>
 
@@ -27,7 +28,8 @@ param(
     [switch]$Report,
     [string]$Around,
     [int]$IntervalSeconds = 20,
-    [int]$KeepDays = 14
+    [int]$KeepDays = 14,
+    [int]$SampleSeconds = 60     # live sample length for -Report when there is no log yet
 )
 
 $root     = $PSScriptRoot
@@ -65,7 +67,8 @@ function Get-Sample {
         $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
         if (-not $p) { continue }
         $adapter = if ($Map.ContainsKey($luid)) { $Map[$luid] } else { "unknown($luid)" }
-        $short = if ($adapter -match 'NVIDIA') { 'NVIDIA' } elseif ($adapter -match 'Intel') { 'Intel' } else { 'other' }
+        $short = if ($adapter -match 'NVIDIA') { 'NVIDIA' } elseif ($adapter -match 'Intel') { 'Intel' }
+                 elseif ($adapter -match 'AMD|Radeon') { 'AMD' } else { 'other' }
         $rows += [pscustomobject]@{
             Time    = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
             Adapter = $short
@@ -80,8 +83,65 @@ function Get-Sample {
 
 # ------------------------------------------------------------------ reporting
 
+function New-LogFile {
+    New-Item -ItemType Directory -Path (Split-Path $csv) -Force | Out-Null
+    if (-not (Test-Path $csv)) {
+        Set-Content -LiteralPath $csv -Value 'Time,Adapter,Engine,Process,Pid,Pct' -Encoding utf8
+    }
+}
+
+function Add-Heartbeat {
+    Add-Content -LiteralPath $csv -Encoding utf8 -Value (
+        '{0},-,-,HEARTBEAT,0,0' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))
+}
+
+# With no background logger there is nothing to report on, so take a short
+# live sample into the same log. Play a video or game meanwhile to see who
+# drives the engines.
+function Invoke-LiveSample {
+    param([int]$Seconds)
+    $map = Get-AdapterMap
+    New-LogFile
+    Write-Host ''
+    Write-Host ('  Sampling the video engines for {0} seconds - use the PC normally' -f $Seconds) -ForegroundColor Cyan
+    Write-Host '  (play a video or game) so there is activity to record.' -ForegroundColor Cyan
+    Write-Host '  ' -NoNewline
+    Add-Heartbeat
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    $busy = 0
+    while ((Get-Date) -lt $deadline) {
+        $rows = Get-Sample -Map $map
+        foreach ($r in $rows) {
+            Add-Content -LiteralPath $csv -Encoding utf8 -Value (
+                '{0},{1},{2},{3},{4},{5}' -f $r.Time, $r.Adapter, $r.Engine, $r.Process, $r.Pid, $r.Pct)
+        }
+        if ($rows) { $busy++; Write-Host '+' -NoNewline -ForegroundColor Green }
+        else       { Write-Host '.' -NoNewline -ForegroundColor DarkGray }
+        Start-Sleep -Seconds 2
+    }
+    Add-Heartbeat
+    Write-Host ''
+    Write-Host ('  {0} sample(s) caught video-engine activity.' -f $busy) -ForegroundColor DarkGray
+}
+
 if ($Report -or $Around) {
-    if (-not (Test-Path $csv)) { Write-Host 'No log yet.' -ForegroundColor Yellow; return }
+    # Heartbeats alone say the logger ran, not what used the engines.
+    $activity = @()
+    if (Test-Path $csv) {
+        $activity = @(Import-Csv $csv -ErrorAction SilentlyContinue | Where-Object { $_.Process -ne 'HEARTBEAT' })
+    }
+    if (-not $activity.Count) {
+        $installed = [bool](Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)
+        Write-Host ''
+        if ($installed) {
+            Write-Host '  The background logger has not recorded any video-engine activity yet.' -ForegroundColor Yellow
+        } else {
+            Write-Host '  No video-engine activity logged - the background logger is not installed.' -ForegroundColor Yellow
+            Write-Host '  For a continuous log, run:  .\log-video-engine.ps1 -Install' -ForegroundColor DarkGray
+        }
+        if ($Around) { return }
+        Invoke-LiveSample -Seconds $SampleSeconds
+    }
     $data = Import-Csv $csv
     if ($Around) {
         $t = [datetime]$Around
@@ -99,27 +159,24 @@ if ($Report -or $Around) {
     Write-Host ('  rows: {0}   span: {1}  ->  {2}' -f $data.Count,
         ($data | Select-Object -First 1).Time, ($data | Select-Object -Last 1).Time) -ForegroundColor Cyan
     Write-Host ''
-    Write-Host '  Intel video-engine users (the ones that matter):' -ForegroundColor Cyan
-    $real | Where-Object { $_.Adapter -eq 'Intel' } |
-        Group-Object Process, Engine |
-        ForEach-Object {
-            [pscustomobject]@{
-                Process = $_.Name.Split(',')[0].Trim()
-                Engine  = $_.Name.Split(',')[1].Trim()
-                Samples = $_.Count
-                AvgPct  = [math]::Round((($_.Group | Measure-Object Pct -Average).Average), 1)
-            }
-        } | Sort-Object Samples -Descending | Format-Table -AutoSize
-    Write-Host '  NVIDIA video-engine users (for comparison):' -ForegroundColor DarkGray
-    $real | Where-Object { $_.Adapter -eq 'NVIDIA' } |
-        Group-Object Process, Engine |
-        ForEach-Object {
-            [pscustomobject]@{
-                Process = $_.Name.Split(',')[0].Trim()
-                Engine  = $_.Name.Split(',')[1].Trim()
-                Samples = $_.Count
-            }
-        } | Sort-Object Samples -Descending | Format-Table -AutoSize
+    # One table per GPU that had activity, busiest GPU first.
+    $byAdapter = @($real | Group-Object Adapter | Sort-Object Count -Descending)
+    if (-not $byAdapter.Count) {
+        Write-Host '  No video-engine activity recorded - nothing used the video engines while logging.' -ForegroundColor DarkGray
+        Write-Host ''
+    }
+    foreach ($a in $byAdapter) {
+        Write-Host ('  {0} GPU video-engine users:' -f $a.Name) -ForegroundColor Cyan
+        $a.Group | Group-Object Process, Engine |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Process = $_.Name.Split(',')[0].Trim()
+                    Engine  = $_.Name.Split(',')[1].Trim()
+                    Samples = $_.Count
+                    AvgPct  = [math]::Round((($_.Group | Measure-Object Pct -Average).Average), 1)
+                }
+            } | Sort-Object Samples -Descending | Format-Table -AutoSize | Out-Host
+    }
     return
 }
 

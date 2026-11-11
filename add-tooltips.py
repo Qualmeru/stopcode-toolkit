@@ -16,15 +16,17 @@ PATH = "ControlPanel.ps1"
 BUTTONS = {
     "BtnRefresh": "Re-read every value on this panel now, including the GPU "
                   "(which is otherwise only polled every 20 seconds).",
-    "RbVr": "VR session: start the Oculus runtime and Virtual Desktop services. "
-            "Needs administrator rights, so expect a UAC prompt when you press Apply.",
+    "RbVr": "VR session: start the VR runtime services found on this PC (Oculus / Meta, "
+            "Virtual Desktop, SteamVR, Vive). Needs administrator rights, so expect a UAC "
+            "prompt when you press Apply. Does nothing if no VR software is installed.",
     "RbFlat": "Flat session: stop the VR services. They start with Windows and keep "
               "using CPU even when no headset is connected.",
     "BtnPreClean": "Tick every recommended app. Frees the most memory, but closes "
                    "your browser too.",
-    "BtnPreBrowse": "Tick everything recommended except Chrome, so you can still look "
-                    "things up while playing.",
-    "BtnPreWork": "Keep Chrome, Edge, Firefox and VS Code open. Frees the least - check the "
+    "BtnPreBrowse": "Tick everything recommended except your web browsers (Chrome, Edge, "
+                    "Firefox, Brave, Opera, Vivaldi), so you can still look things up "
+                    "while playing.",
+    "BtnPreWork": "Keep your web browsers and VS Code open. Frees the least - check the "
                   "headroom reading before using this with a demanding game.",
     "BtnPreNone": "Untick everything. Nothing will be closed when you press Apply.",
     "BtnApply": "Apply the VR choice, then close every ticked app. Each one is asked "
@@ -40,9 +42,10 @@ BUTTONS = {
                         "change something and want to measure its effect from now on.",
     "BtnFaultAnalyze": "Collect crash dumps and error reports into the diag folder so "
                        "they can be read. Needs administrator rights.",
-    "BtnVideoReport": "Show which programs have been using each GPU's video engines. "
-                      "Intel's video engine is where the 0x141 faults happen, so this "
-                      "shows what might be triggering them.",
+    "BtnVideoReport": "Show which programs have been using each GPU's video engines "
+                      "(decode, encode, processing). Video-engine timeouts (0x141) happen "
+                      "there, so this shows what might be triggering them. If the background "
+                      "logger has not recorded anything yet, it samples live for a minute first.",
     "BtnGpuMonitor": "Watch the GPU for five minutes (temperature, power and throttling "
                      "on NVIDIA; engine load and memory on other GPUs), and report "
                      "whether any new faults occurred.",
@@ -50,8 +53,9 @@ BUTTONS = {
                     "Changes nothing.",
     "BtnCleanApply": "Delete regenerable caches and stale crash dumps. Never touches "
                      "documents, Downloads or game installs. Needs admin.",
-    "BtnReport": "Open the written investigation: what each fault was, how it was "
-                 "found, and what is still open.",
+    "BtnReport": "Open fault-report.html from the tools folder, if you have written one: "
+                 "what each fault was, how it was found, and what is still open. It is "
+                 "personal, so it is not part of the repo.",
     "BtnFolder": "Open the folder containing all of these scripts.",
     "BtnClearLog": "Empty the log box below.",
     "BtnCopyLog": "Copy everything in the log to the clipboard, ready to paste.",
@@ -66,16 +70,16 @@ BUTTONS = {
 TILES = {
     "COMMIT": "Memory committed against the total available (RAM plus pagefile). "
               "When this reaches the limit, programs stop being able to allocate and "
-              "the desktop can collapse - which has happened twice on this machine.",
-    "HEADROOM": "How much commit is still free. Witcher 3 on its own needs about "
-                "10 GB. Green is comfortable, amber is tight, red means a demanding "
-                "game is likely to cause problems.",
-    "GPU": "Current temperature and power draw of an NVIDIA GPU, read from nvidia-smi. "
-           "Turns amber above 75 degrees and red above 85. Shows n/a when there is "
-           "no NVIDIA GPU.",
-    "FAULTS": "Kernel faults recorded by Windows, shown as 0x141 / 0x193 / 0xA. "
-              "The 0x141 engine timeouts come from Intel's display driver and are the "
-              "long-running problem on this machine.",
+              "the desktop can collapse.",
+    "HEADROOM": "How much commit is still free. A demanding game can need 10 GB or more "
+                "on its own. Green (18 GB or more) is comfortable, amber is tight, red "
+                "(under 12 GB) means a demanding game is likely to cause problems.",
+    "GPU": "On an NVIDIA GPU: temperature and power draw from nvidia-smi, amber above "
+           "75 degrees and red above 85. On other GPUs (Intel, AMD): current 3D load "
+           "from the Windows GPU counters, as Task Manager shows it.",
+    "FAULTS": "Kernel error reports Windows has recorded (crashes, GPU engine timeouts, "
+              "live dumps), with how many are new since the saved baseline. The Kernel "
+              "faults card lists them by type.",
 }
 
 

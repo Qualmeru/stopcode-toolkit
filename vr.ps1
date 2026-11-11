@@ -1,5 +1,5 @@
 <#
-    vr.ps1 - turn the VR stack (Oculus runtime + Virtual Desktop) on or off.
+    vr.ps1 - turn the VR stack (Oculus / Meta, Virtual Desktop, SteamVR) on or off.
 
     Why: the Virtual Desktop service creates a 59 Hz virtual display that
     Windows was using as the primary monitor. Mixed 59/60 Hz across displays
@@ -16,10 +16,24 @@ param(
     [string]$Action = 'status'
 )
 
-$services = @(
-    @{ Name = 'OVRService';                 Label = 'Oculus VR Runtime' },
-    @{ Name = 'VirtualDesktop.Service.exe'; Label = 'Virtual Desktop'   }
-)
+# VR services are discovered, matching gaming-mode.ps1, so this works with
+# whatever VR software is installed (Oculus / Meta, Virtual Desktop, SteamVR, Vive).
+$services = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+    Where-Object {
+        ($_.Name -match 'OVR|Oculus|VirtualDesktop' -or
+         $_.DisplayName -match 'Oculus|Virtual Desktop|SteamVR|Vive') -and
+        $_.Name -notmatch 'LibraryService'   # on-demand, leave alone
+    } |
+    ForEach-Object { @{ Name = $_.Name; Label = $_.DisplayName } })
+
+if (-not $services.Count) {
+    Write-Host ''
+    Write-Host '  No VR software installed (no Oculus / Meta, Virtual Desktop, SteamVR or' -ForegroundColor DarkGray
+    Write-Host '  Vive services) - nothing to turn on or off.' -ForegroundColor DarkGray
+    Write-Host ''
+    if ($Action -ne 'status') { Start-Sleep -Seconds 3 }
+    return
+}
 
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()

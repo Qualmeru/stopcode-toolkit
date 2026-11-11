@@ -1,11 +1,11 @@
 <#
     gaming-mode.ps1 - free up the machine before a game, with you choosing what closes.
 
-    This machine's lag is dominated by commit pressure, not raw speed: it has
-    32 GB of RAM against a 47.8 GB commit limit, and a game plus a full browser
-    load has twice exhausted it badly enough to kill dwm.exe. So the single most
-    useful thing before playing is reclaiming commit, and the second is stopping
-    background work that was never needed.
+    Game stutter and desktop crashes are often commit pressure, not raw speed:
+    a game plus a full browser load can exhaust the commit limit (RAM plus
+    pagefile) badly enough to kill dwm.exe. So the single most useful thing
+    before playing is reclaiming commit, and the second is stopping background
+    work that was never needed.
 
     Nothing is closed without you picking it. Apps are asked to close politely
     first so they can save state, and only forced if they ignore it.
@@ -17,7 +17,7 @@
         .\gaming-mode.ps1 -Restore     bring the VR stack and power plan back
         .\gaming-mode.ps1 -WhatIf      show what it would do, change nothing
         .\gaming-mode.ps1 -Flat -Recommended   take the recommended set, no prompt
-        .\gaming-mode.ps1 -Flat -Preset browse keep Chrome, close the rest
+        .\gaming-mode.ps1 -Flat -Preset browse keep web browsers, close the rest
         .\gaming-mode.ps1 -Flat -Keep chrome,Discord   spare these whatever else is picked
         .\gaming-mode.ps1 -Flat -PowerPlan     also switch the power plan
 #>
@@ -37,12 +37,13 @@ param(
 )
 
 # Keep-presets: start from the recommended set, then spare the named processes.
-# Chrome and VS Code are ~10 GB of the ~15 GB the recommended set frees, so they
-# are the only two worth a dedicated preset.
+# Browsers and VS Code are usually the biggest things the recommended set
+# frees, so they are the ones worth a dedicated preset.
+$Browsers = @('chrome','msedge','firefox','brave','opera','vivaldi')
 $Presets = @{
-    'clean'  = @{ Keep = @();                 Desc = 'close everything recommended' }
-    'browse' = @{ Keep = @('chrome');         Desc = 'keep Chrome for looking things up' }
-    'work'   = @{ Keep = @('chrome','msedge','firefox','Code');  Desc = 'keep browsers (Chrome, Edge, Firefox) and VS Code' }
+    'clean'  = @{ Keep = @();                       Desc = 'close everything recommended' }
+    'browse' = @{ Keep = $Browsers;                 Desc = 'keep web browsers for looking things up' }
+    'work'   = @{ Keep = $Browsers + @('Code');     Desc = 'keep web browsers and VS Code' }
 }
 
 $stateFile = Join-Path $PSScriptRoot 'diag\gaming-mode-state.json'
@@ -56,7 +57,7 @@ if ($Keep) {
 
 # --------------------------------------------------------------- protected set
 # Never offered for closing: the OS would break, security would be weakened, or
-# the fault monitoring this machine depends on would stop recording.
+# the fault monitoring would stop recording.
 $Protected = @(
     'System','Idle','Registry','Memory Compression','csrss','wininit','winlogon',
     'services','lsass','smss','fontdrvhost','dwm','explorer','sihost','ctfmon',
@@ -75,6 +76,9 @@ $Recommend = @{
     'chrome'           = 'biggest commit consumer; restores tabs'
     'msedge'           = 'browser; restores tabs'
     'firefox'          = 'browser; restores tabs'
+    'brave'            = 'browser; restores tabs'
+    'opera'            = 'browser; restores tabs'
+    'vivaldi'          = 'browser; restores tabs'
     'msedgewebview2'   = 'embedded browsers in other apps'
     'Code'             = 'VS Code; reopens with files intact'
     'Signal'           = 'chat; reconnects'
@@ -174,7 +178,7 @@ if ($Restore) {
 if (-not $VR -and -not $Flat) {
     Write-Host ''
     Write-Host '  What kind of session?' -ForegroundColor Cyan
-    Write-Host '    [1] VR      - start the VR stack (Oculus runtime, Virtual Desktop)'
+    Write-Host '    [1] VR      - start the VR stack (Oculus / Meta, Virtual Desktop, SteamVR)'
     Write-Host '    [2] Flat    - shut the VR stack down and reclaim what it uses'
     Write-Host ''
     $pick = Read-Host '  Choose 1 or 2'
@@ -203,7 +207,7 @@ $state = @{
 $vrSvc = @(Get-VrServices)
 Write-Host '  VR stack' -ForegroundColor Cyan
 if (-not $vrSvc) {
-    Write-Host '    none detected on this machine' -ForegroundColor DarkGray
+    Write-Host '    no VR software installed - nothing to start or stop' -ForegroundColor DarkGray
 } else {
     foreach ($s in $vrSvc) {
         Write-Host ('    {0,-30} {1}' -f $s.DisplayName, $s.State)
@@ -403,8 +407,8 @@ $head = $c.LimitGB - $c.UsedGB
 Write-Host ('  {0,-10} {1,5:N1} GB of headroom' -f 'free', $head) -ForegroundColor $(if ($head -lt 10) { 'Yellow' } else { 'Green' })
 if ($head -lt 12) {
     Write-Host ''
-    Write-Host '  WARNING: Witcher 3 alone commits ~10 GB. Under 12 GB free is where' -ForegroundColor Yellow
-    Write-Host '           this machine has previously exhausted commit and killed dwm.' -ForegroundColor Yellow
+    Write-Host '  WARNING: a demanding game can commit 10 GB or more on its own. With' -ForegroundColor Yellow
+    Write-Host '           under 12 GB free, running out of commit can crash the desktop (dwm).' -ForegroundColor Yellow
 }
 Write-Host ''
 Write-Host '  Afterwards:  .\gaming-mode.ps1 -Restore' -ForegroundColor DarkGray

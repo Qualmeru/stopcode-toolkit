@@ -14,6 +14,16 @@
 $out = Join-Path $PSScriptRoot 'restart-asus-osd.txt'
 $log = @()
 
+# ASUS laptops only. Anywhere else there is nothing to restart, so say so
+# straight away instead of searching the DriverStore for an exe that is not there.
+if (-not (Get-Service -Name 'ASUSOptimization' -ErrorAction SilentlyContinue) -and
+    -not (Get-Process AsusOSD -ErrorAction SilentlyContinue)) {
+    Write-Host 'No ASUS hotkey / OSD software on this PC (ASUSOptimization service and' -ForegroundColor DarkGray
+    Write-Host 'AsusOSD not found) - this script only applies to ASUS laptops.' -ForegroundColor DarkGray
+    Start-Sleep -Seconds 3
+    return
+}
+
 function Note { param([string]$m) ; $script:log += ('{0}  {1}' -f (Get-Date -Format 'HH:mm:ss'), $m) }
 
 Note 'before:'

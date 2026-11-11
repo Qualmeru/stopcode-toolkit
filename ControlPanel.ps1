@@ -47,18 +47,52 @@ $Caution = @{
     'AsusScreenXpertReunion'='closing may disable the ScreenPad'
     'Docker Desktop'='stops your containers'; 'com.docker.backend'='stops your containers'
 }
+$Browsers = @('chrome','msedge','firefox','brave','opera','vivaldi')
+foreach ($b in @('brave','opera','vivaldi')) { $Recommend[$b] = 'browser; restores tabs' }
 $Presets = @{
     'clean'  = @()
-    'browse' = @('chrome')
-    'work'   = @('chrome','msedge','firefox','Code')
+    'browse' = $Browsers
+    'work'   = $Browsers + @('Code')
 }
+
+# Bugcheck codes Windows records in WER kernel reports, for naming them on the
+# Kernel faults card. Keyed by lower-case hex without 0x.
+$BugNames = @{
+    'a'='IRQL_NOT_LESS_OR_EQUAL'; '18'='REFERENCE_BY_POINTER'; '19'='BAD_POOL_HEADER'
+    '1a'='MEMORY_MANAGEMENT'; '1e'='KMODE_EXCEPTION_NOT_HANDLED'; '3b'='SYSTEM_SERVICE_EXCEPTION'
+    '50'='PAGE_FAULT_IN_NONPAGED_AREA'; '7e'='SYSTEM_THREAD_EXCEPTION_NOT_HANDLED'
+    '7f'='UNEXPECTED_KERNEL_MODE_TRAP'; '9c'='MACHINE_CHECK_EXCEPTION'
+    '9f'='DRIVER_POWER_STATE_FAILURE'; 'a0'='INTERNAL_POWER_ERROR'
+    'be'='ATTEMPTED_WRITE_TO_READONLY_MEMORY'; 'c1'='SPECIAL_POOL_DETECTED_MEMORY_CORRUPTION'
+    'c2'='BAD_POOL_CALLER'; 'c4'='DRIVER_VERIFIER_DETECTED_VIOLATION'
+    'c9'='DRIVER_VERIFIER_IOMANAGER_VIOLATION'; 'd1'='DRIVER_IRQL_NOT_LESS_OR_EQUAL'
+    'd6'='DRIVER_PAGE_FAULT_BEYOND_END_OF_ALLOCATION'; 'ea'='THREAD_STUCK_IN_DEVICE_DRIVER'
+    'ef'='CRITICAL_PROCESS_DIED'; 'fc'='ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY'
+    '101'='CLOCK_WATCHDOG_TIMEOUT'; '116'='VIDEO_TDR_FAILURE'; '117'='VIDEO_TDR_TIMEOUT_DETECTED'
+    '119'='VIDEO_SCHEDULER_INTERNAL_ERROR'; '124'='WHEA_UNCORRECTABLE_ERROR'
+    '133'='DPC_WATCHDOG_VIOLATION'; '139'='KERNEL_SECURITY_CHECK_FAILURE'
+    '13a'='KERNEL_MODE_HEAP_CORRUPTION'; '141'='VIDEO_ENGINE_TIMEOUT_DETECTED'
+    '144'='BUGCODE_USB3_DRIVER'; '154'='UNEXPECTED_STORE_EXCEPTION'
+    '15f'='CONNECTED_STANDBY_WATCHDOG_TIMEOUT_LIVEDUMP'; '161'='LIVE_SYSTEM_DUMP'
+    '190'='WIN32K_CRITICAL_FAILURE_LIVEDUMP'; '193'='VIDEO_DXGKRNL_LIVEDUMP'
+    '1c8'='MANUALLY_INITIATED_POWER_BUTTON_HOLD'
+}
+
+# "ThinkPad T14 Gen 6", "ZenBook ...": shown in the header so it is clear which PC this is.
+$script:Model = ''
+try {
+    $bios = Get-ItemProperty 'HKLM:\HARDWARE\DESCRIPTION\System\BIOS' -ErrorAction Stop
+    foreach ($v in @($bios.SystemFamily, $bios.SystemProductName)) {
+        if ($v -and $v -notmatch 'To be filled|System Product Name|Default string|^\s*$') { $script:Model = $v.Trim(); break }
+    }
+} catch { }
 
 # --------------------------------------------------------------------- layout
 
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ZenBook Control Panel" Height="820" Width="1200"
+        Title="Stopcode Toolkit" Height="820" Width="1200"
         MinHeight="640" MinWidth="980"
         WindowStartupLocation="CenterScreen" Background="#0D1117">
   <Window.Resources>
@@ -189,30 +223,30 @@ $xaml = @'
           <Path Width="26" Height="26" Stretch="Uniform" Fill="#4FB8C0"
                 Data="M12 2 L21 6.5 V12 C21 17 17 21 12 22 C7 21 3 17 3 12 V6.5 Z M12 7 L12 15 M8.5 11 L12 7.5 L15.5 11"/>
           <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
-            <TextBlock Text="ZenBook Control Panel" Foreground="#E7ECF3" FontSize="17" FontWeight="Bold"/>
+            <TextBlock Text="Stopcode Toolkit" Foreground="#E7ECF3" FontSize="17" FontWeight="Bold"/>
             <TextBlock x:Name="TxtMachine" Text="" Foreground="#78838F" FontSize="11" FontFamily="Consolas"/>
           </StackPanel>
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="Memory committed against the total available (RAM plus pagefile). When this reaches the limit, programs stop being able to allocate and the desktop can collapse - which has happened twice on this machine.">
+          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="Memory committed against the total available (RAM plus pagefile). When this reaches the limit, programs stop being able to allocate and the desktop can collapse.">
             <StackPanel>
               <TextBlock Text="COMMIT" Foreground="#78838F" FontSize="9" FontFamily="Consolas"/>
               <TextBlock x:Name="TxtCommit" Text="--" Foreground="#E7ECF3" FontSize="13" FontFamily="Consolas"/>
             </StackPanel>
           </Border>
-          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="How much commit is still free. Witcher 3 on its own needs about 10 GB. Green is comfortable, amber is tight, red means a demanding game is likely to cause problems.">
+          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="How much commit is still free. A demanding game can need 10 GB or more on its own. Green (18 GB or more) is comfortable, amber is tight, red (under 12 GB) means a demanding game is likely to cause problems.">
             <StackPanel>
               <TextBlock Text="HEADROOM" Foreground="#78838F" FontSize="9" FontFamily="Consolas"/>
               <TextBlock x:Name="TxtHead" Text="--" Foreground="#5BC08C" FontSize="13" FontFamily="Consolas"/>
             </StackPanel>
           </Border>
-          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="Current temperature and power draw of an NVIDIA GPU, read from nvidia-smi. Turns amber above 75 degrees and red above 85. Shows n/a when there is no NVIDIA GPU.">
+          <Border Background="#11202A" CornerRadius="4" Padding="12,7" Margin="0,0,8,0" ToolTip="On an NVIDIA GPU: temperature and power draw from nvidia-smi, amber above 75 degrees and red above 85. On other GPUs (Intel, AMD): current 3D load from the Windows GPU counters, as Task Manager shows it.">
             <StackPanel>
               <TextBlock Text="GPU" Foreground="#78838F" FontSize="9" FontFamily="Consolas"/>
               <TextBlock x:Name="TxtGpu" Text="--" Foreground="#E7ECF3" FontSize="13" FontFamily="Consolas"/>
             </StackPanel>
           </Border>
-          <Border Background="#11202A" CornerRadius="4" Padding="12,7" ToolTip="Kernel faults recorded by Windows, shown as 0x141 / 0x193 / 0xA. The 0x141 engine timeouts come from Intel's display driver and are the long-running problem on this machine.">
+          <Border Background="#11202A" CornerRadius="4" Padding="12,7" ToolTip="Kernel error reports Windows has recorded (crashes, GPU engine timeouts, live dumps), with how many are new since the saved baseline. The Kernel faults card lists them by type.">
             <StackPanel>
               <TextBlock Text="FAULTS" Foreground="#78838F" FontSize="9" FontFamily="Consolas"/>
               <TextBlock x:Name="TxtFaults" Text="--" Foreground="#E0A93A" FontSize="13" FontFamily="Consolas"/>
@@ -221,8 +255,10 @@ $xaml = @'
         </StackPanel>
         <Button Grid.Column="2" x:Name="BtnRefresh" Margin="12,0,0,0" ToolTip="Re-read every value on this panel now, including the GPU (which is otherwise only polled every 20 seconds).">
           <StackPanel Orientation="Horizontal">
-            <Path Width="13" Height="13" Stretch="Uniform" Fill="#E7ECF3"
-                  Data="M12 4 A8 8 0 1 0 20 12 M12 4 L12 0.5 M12 4 L15.5 7"/>
+            <!-- Stroked, not filled: filling these open arcs drew a solid white blob. -->
+            <Path Width="13" Height="13" Stretch="Uniform" Stroke="#E7ECF3" StrokeThickness="1.8"
+                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                  Data="M20 12 A8 8 0 1 1 17.66 6.34 M17.66 1.5 L17.66 6.34 L12.8 6.34"/>
             <TextBlock Text="Refresh" Margin="7,0,0,0"/>
           </StackPanel>
         </Button>
@@ -256,12 +292,12 @@ $xaml = @'
                      Text="Pick a session type and what to close. Apps are asked to close politely first, so they save state. Protected system processes are never listed."/>
 
           <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,10">
-            <RadioButton x:Name="RbVr"   Content="VR session"  GroupName="mode" ToolTip="VR session: start the Oculus runtime and Virtual Desktop services. Needs administrator rights, so expect a UAC prompt when you press Apply." />
+            <RadioButton x:Name="RbVr"   Content="VR session"  GroupName="mode" ToolTip="VR session: start the VR runtime services found on this PC (Oculus / Meta, Virtual Desktop, SteamVR, Vive). Needs administrator rights, so expect a UAC prompt when you press Apply. Does nothing if no VR software is installed." />
             <RadioButton x:Name="RbFlat" Content="Flat / non-VR" GroupName="mode" IsChecked="True" ToolTip="Flat session: stop the VR services. They start with Windows and keep using CPU even when no headset is connected." />
             <Rectangle Width="1" Fill="#28313D" Margin="6,2,14,2"/>
             <Button x:Name="BtnPreClean"  Content="Clean" ToolTip="Tick every recommended app. Frees the most memory, but closes your browser too." />
-            <Button x:Name="BtnPreBrowse" Content="Browse" ToolTip="Tick everything recommended except Chrome, so you can still look things up while playing." />
-            <Button x:Name="BtnPreWork"   Content="Work" ToolTip="Keep Chrome, Edge, Firefox and VS Code open. Frees the least - check the headroom reading before using this with a demanding game." />
+            <Button x:Name="BtnPreBrowse" Content="Browse" ToolTip="Tick everything recommended except your web browsers (Chrome, Edge, Firefox, Brave, Opera, Vivaldi), so you can still look things up while playing." />
+            <Button x:Name="BtnPreWork"   Content="Work" ToolTip="Keep your web browsers and VS Code open. Frees the least - check the headroom reading before using this with a demanding game." />
             <Button x:Name="BtnPreNone"   Content="None" ToolTip="Untick everything. Nothing will be closed when you press Apply." />
           </StackPanel>
 
@@ -310,7 +346,7 @@ $xaml = @'
               </StackPanel>
               <TextBlock x:Name="TxtMon" Style="{StaticResource Sub}" Text="--"/>
               <WrapPanel>
-                <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines. Intel's video engine is where the 0x141 faults happen, so this shows what might be triggering them." />
+                <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines (decode, encode, processing). Video-engine timeouts (0x141) happen there, so this shows what might be triggering them. If the background logger has not recorded anything yet, it samples live for a minute first." />
                 <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch the GPU for five minutes (temperature, power and throttling on NVIDIA; engine load and memory on other GPUs), and report whether any new faults occurred." />
               </WrapPanel>
             </StackPanel>
@@ -360,7 +396,7 @@ $xaml = @'
               </StackPanel>
               <TextBlock Style="{StaticResource Sub}" Text="The written investigation, and the folder holding every script."/>
               <WrapPanel>
-                <Button x:Name="BtnReport" Content="Open report" ToolTip="Open the written investigation: what each fault was, how it was found, and what is still open." />
+                <Button x:Name="BtnReport" Content="Open report" ToolTip="Open fault-report.html from the tools folder, if you have written one: what each fault was, how it was found, and what is still open. It is personal, so it is not part of the repo." />
                 <Button x:Name="BtnFolder" Content="Open folder" Margin="0,0,8,8" ToolTip="Open the folder containing all of these scripts." />
               </WrapPanel>
             </StackPanel>
@@ -431,14 +467,59 @@ function Write-Log {
     $script:TxtLog.ScrollToEnd()
 }
 
+# The status refresh runs on the UI thread every few seconds, so it must be
+# fast. Get-Counter (~1 s), Win32_OperatingSystem (~0.3 s) and
+# Get-ScheduledTask (~1.8 s each) together froze the window for ~5 s of every
+# 6, which showed up as scroll lag. These native calls take milliseconds.
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class SysInfo {
+  [StructLayout(LayoutKind.Sequential)]
+  struct MEMORYSTATUSEX {
+    public uint dwLength; public uint dwMemoryLoad;
+    public ulong ullTotalPhys; public ulong ullAvailPhys;
+    public ulong ullTotalPageFile; public ulong ullAvailPageFile;
+    public ulong ullTotalVirtual; public ulong ullAvailVirtual; public ulong ullAvailExtendedVirtual;
+  }
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX m);
+  [DllImport("kernel32.dll")] public static extern ulong GetTickCount64();
+  // { committed bytes, commit limit } - the same values as the Memory counters.
+  public static ulong[] Commit() {
+    var m = new MEMORYSTATUSEX();
+    m.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+    if (!GlobalMemoryStatusEx(ref m)) return null;
+    return new ulong[] { m.ullTotalPageFile - m.ullAvailPageFile, m.ullTotalPageFile };
+  }
+}
+'@ -ErrorAction SilentlyContinue
+
 function Get-Commit {
     try {
-        $s = (Get-Counter '\Memory\Committed Bytes','\Memory\Commit Limit' -ErrorAction Stop).CounterSamples
-        $c = ($s | Where-Object { $_.Path -match 'Committed' }).CookedValue
-        $l = ($s | Where-Object { $_.Path -match 'Limit' }).CookedValue
+        $v = [SysInfo]::Commit()
+        if (-not $v) { return $null }
+        $c = [double]$v[0]; $l = [double]$v[1]
         [pscustomobject]@{ UsedGB = $c/1GB; LimitGB = $l/1GB; FreeGB = ($l-$c)/1GB; Pct = $c/$l*100 }
     } catch { $null }
 }
+
+# Task Scheduler over COM: ~15 ms per lookup instead of ~1.8 s for Get-ScheduledTask.
+$script:TaskStates = @{ 0 = 'Unknown'; 1 = 'Disabled'; 2 = 'Queued'; 3 = 'Ready'; 4 = 'Running' }
+$script:TaskFolder = $null
+function Get-TaskState {
+    param([string]$Name)
+    try {
+        if (-not $script:TaskFolder) {
+            $svc = New-Object -ComObject Schedule.Service
+            $svc.Connect()
+            $script:TaskFolder = $svc.GetFolder('\')
+        }
+        $s = $script:TaskFolder.GetTask($Name).State
+        if ($script:TaskStates.ContainsKey([int]$s)) { $script:TaskStates[[int]$s] } else { [string]$s }
+    } catch { $null }   # GetTask throws when the task does not exist
+}
+
+$script:OsBuild = [Environment]::OSVersion.Version.Build
 
 # A launched console - especially an elevated one - often opens behind this
 # window, which makes it look as though nothing happened. Poll briefly for its
@@ -515,11 +596,42 @@ function Update-Status {
     }
 
     try {
-        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
-        $up = ((Get-Date) - $os.LastBootUpTime)
-        $TxtMachine.Text = '{0}   |   up {1:N0}h {2:N0}m   |   Win {3}' -f $env:COMPUTERNAME, $up.TotalHours, $up.Minutes, $os.BuildNumber
+        $up = [TimeSpan]::FromMilliseconds([double][SysInfo]::GetTickCount64())
+        $who = if ($script:Model) { '{0}   |   {1}' -f $env:COMPUTERNAME, $script:Model } else { $env:COMPUTERNAME }
+        $TxtMachine.Text = '{0}   |   up {1:N0}h {2:N0}m   |   Win {3}' -f $who, [math]::Floor($up.TotalHours), $up.Minutes, $script:OsBuild
     } catch { }
 
+    # Everything below touches the disk or other services. None of it changes
+    # quickly, so read it every 30 s (or on Refresh) rather than every tick,
+    # and keep the window responsive in between.
+    if ($IncludeSlow -or ((Get-Date) - $script:LastSlow).TotalSeconds -ge 30) {
+        $script:LastSlow = Get-Date
+        Update-SlowStatus
+    }
+
+    # nvidia-smi spawns a process, so only poll it occasionally.
+    if ($IncludeSlow -or ((Get-Date) - $script:LastGpu).TotalSeconds -gt 20) {
+        $script:LastGpu = Get-Date
+        try {
+            $smi = 'C:\Windows\System32\nvidia-smi.exe'
+            if (Test-Path $smi) {
+                $r = (& $smi --query-gpu=temperature.gpu,power.draw,clocks.sm --format=csv,noheader,nounits 2>$null)
+                if ($r) {
+                    $p = ($r -split ',') | ForEach-Object { $_.Trim() }
+                    $TxtGpu.Text = '{0}C  {1}W' -f $p[0], [math]::Round([double]$p[1])
+                    $gHex = if ([int]$p[0] -ge 85) { '#EA7A70' } elseif ([int]$p[0] -ge 75) { '#E0A93A' } else { '#E7ECF3' }
+                    $TxtGpu.Foreground = New-Brush $gHex
+                }
+            } else { Update-GpuLoad }
+        } catch { }
+    }
+    # Pick up a background GPU-load sample that has finished since the last tick.
+    Receive-GpuLoad
+}
+
+$script:LastSlow = [datetime]::MinValue
+
+function Update-SlowStatus {
     # Kernel fault counts, read straight from the WER folders.
     try {
         $roots = @("$env:ProgramData\Microsoft\Windows\WER\ReportQueue",
@@ -535,28 +647,49 @@ function Update-Status {
                     }
                 }
         }
-        $g141 = if ($counts.ContainsKey('141')) { $counts['141'] } else { 0 }
-        $g193 = if ($counts.ContainsKey('193')) { $counts['193'] } else { 0 }
-        $gA   = if ($counts.ContainsKey('a'))   { $counts['a'] }   else { 0 }
-        $TxtFaults.Text = '{0} / {1} / {2}' -f $g141, $g193, $gA
+        # Every bugcheck code counts, whatever this PC's problem happens to be.
+        $total = 0; foreach ($v in $counts.Values) { $total += $v }
 
+        # New since the baseline crash-count.ps1 saved, across all codes.
         $baseFile = Join-Path $Root 'crash-baseline.json'
-        $deltaTxt = ''
-        if (Test-Path $baseFile) {
+        $newBy = @{}; $newTotal = 0; $hasBase = Test-Path $baseFile
+        if ($hasBase) {
             $b = Get-Content $baseFile -Raw | ConvertFrom-Json
-            $b141 = if ($b.'141') { [int]$b.'141' } else { 0 }
-            $d = $g141 - $b141
-            $deltaTxt = if ($d -gt 0) { "  ({0} new 0x141 since baseline)" -f $d } else { '  (no new 0x141 since baseline)' }
+            foreach ($k in $counts.Keys) {
+                $was = if ($b.PSObject.Properties[$k]) { [int]$b.$k } else { 0 }
+                $d = $counts[$k] - $was
+                if ($d -gt 0) { $newBy[$k] = $d; $newTotal += $d }
+            }
         }
-        $TxtFaultDetail.Text = ('0x141 engine timeout: {0}' -f $g141) + [Environment]::NewLine +
-                               ('0x193 dxgkrnl livedump: {0}' -f $g193) + [Environment]::NewLine +
-                               ('0xA bugcheck: {0}' -f $gA) + $deltaTxt
+
+        $TxtFaults.Text = if ($newTotal) { '{0}  +{1} new' -f $total, $newTotal } else { [string]$total }
+        $fHex = if ($newTotal) { '#EA7A70' } elseif ($total) { '#E0A93A' } else { '#5BC08C' }
+        $TxtFaults.Foreground = New-Brush $fHex
+
+        $nl = [Environment]::NewLine
+        if (-not $total) {
+            $detail = 'No kernel error reports recorded by Windows.'
+        } else {
+            $lines = foreach ($k in ($counts.Keys | Sort-Object { -$counts[$_] }, { $_ } | Select-Object -First 6)) {
+                $name = if ($BugNames.ContainsKey($k)) { $BugNames[$k] } else { 'unrecognised code' }
+                $tag  = if ($newBy.ContainsKey($k)) { '  (+{0} new)' -f $newBy[$k] } else { '' }
+                '0x{0}  {1}: {2}{3}' -f $k.ToUpper(), $name, $counts[$k], $tag
+            }
+            $detail = ($lines -join $nl)
+            if ($counts.Count -gt 6) { $detail += $nl + ('...and {0} more type(s)' -f ($counts.Count - 6)) }
+        }
+        if ($hasBase) {
+            $detail += $nl + $(if ($newTotal) { '{0} new since the baseline.' -f $newTotal } else { 'Nothing new since the baseline.' })
+        } else {
+            $detail += $nl + 'No baseline yet - "Count vs baseline" saves one.'
+        }
+        $TxtFaultDetail.Text = $detail
     } catch { }
 
     # Monitoring task state.
     try {
-        $w = (Get-ScheduledTask -TaskName 'KernelDumpWatcher' -ErrorAction SilentlyContinue).State
-        $l = (Get-ScheduledTask -TaskName 'VideoEngineLogger' -ErrorAction SilentlyContinue).State
+        $w = Get-TaskState 'KernelDumpWatcher'
+        $l = Get-TaskState 'VideoEngineLogger'
         $csv = Join-Path $Root 'diag\video-engine.csv'
         $rows = if (Test-Path $csv) { (Get-Content $csv -ErrorAction SilentlyContinue).Count - 1 } else { 0 }
         $wTxt = if ($w) { [string]$w } else { 'not installed' }
@@ -566,26 +699,44 @@ function Update-Status {
     } catch { }
 
     try {
-        $d = Get-PSDrive C -ErrorAction Stop
-        $TxtDisk.Text = '{0:N0} GB free of {1:N0} GB  ({2:N0}% used)' -f ($d.Free/1GB), (($d.Free+$d.Used)/1GB), ($d.Used/($d.Free+$d.Used)*100)
+        $d = New-Object IO.DriveInfo 'C'
+        $used = $d.TotalSize - $d.AvailableFreeSpace
+        $TxtDisk.Text = '{0:N0} GB free of {1:N0} GB  ({2:N0}% used)' -f ($d.AvailableFreeSpace/1GB), ($d.TotalSize/1GB), ($used/$d.TotalSize*100)
     } catch { }
+}
 
-    # nvidia-smi spawns a process, so only poll it occasionally.
-    if ($IncludeSlow -or ((Get-Date) - $script:LastGpu).TotalSeconds -gt 20) {
-        $script:LastGpu = Get-Date
-        try {
-            $smi = 'C:\Windows\System32\nvidia-smi.exe'
-            if (Test-Path $smi) {
-                $r = (& $smi --query-gpu=temperature.gpu,power.draw,clocks.sm --format=csv,noheader,nounits 2>$null)
-                if ($r) {
-                    $p = ($r -split ',') | ForEach-Object { $_.Trim() }
-                    $TxtGpu.Text = '{0}C  {1}W' -f $p[0], [math]::Round([double]$p[1])
-                    $gHex = if ([int]$p[0] -ge 85) { '#EA7A70' } elseif ([int]$p[0] -ge 75) { '#E0A93A' } else { '#E7ECF3' }
-                    $TxtGpu.Foreground = New-Brush $gHex
-                }
-            } else { $TxtGpu.Text = 'n/a' }
-        } catch { }
-    }
+# Without nvidia-smi, read 3D load from the Windows GPU counters (any vendor).
+# That takes 1-3 s, so it runs in a background runspace and the result is
+# collected on a later tick - the window never waits for it.
+$script:GpuJob = $null
+function Update-GpuLoad {
+    if ($script:GpuJob) { return }   # previous sample still running
+    $ps = [powershell]::Create().AddScript({
+        $s = (Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction SilentlyContinue).CounterSamples
+        # Same method as Task Manager: sum each engine across processes, report the busiest.
+        $eng = @{}
+        foreach ($x in $s) {
+            if ($x.InstanceName -match '^pid_\d+_(luid_.+_eng_\d+)_engtype_') {
+                $eng[$matches[1]] = [double]$eng[$matches[1]] + $x.CookedValue
+            }
+        }
+        if ($eng.Count) { [math]::Min(100, [math]::Round(($eng.Values | Measure-Object -Maximum).Maximum)) } else { -1 }
+    })
+    $script:GpuJob = @{ PS = $ps; Handle = $ps.BeginInvoke() }
+}
+
+function Receive-GpuLoad {
+    $j = $script:GpuJob
+    if (-not $j -or -not $j.Handle.IsCompleted) { return }
+    $script:GpuJob = $null
+    try {
+        $v = @($j.PS.EndInvoke($j.Handle))[0]
+        if ($null -ne $v -and $v -ge 0) {
+            $TxtGpu.Text = '3D {0}%' -f $v
+            $TxtGpu.Foreground = New-Brush '#E7ECF3'
+        } else { $TxtGpu.Text = 'n/a' }
+    } catch { $TxtGpu.Text = 'n/a' }
+    finally { $j.PS.Dispose() }
 }
 
 # ----------------------------------------------------------- process picker
@@ -754,7 +905,7 @@ $BtnApply.Add_Click({
     $after = Get-Commit
     if ($before -and $after) {
         Write-Log ("commit {0:N1} -> {1:N1} GB, headroom now {2:N1} GB" -f $before.UsedGB, $after.UsedGB, $after.FreeGB) 'ok'
-        if ($after.FreeGB -lt 12) { Write-Log 'headroom under 12 GB - Witcher 3 alone commits ~10 GB' 'warn' }
+        if ($after.FreeGB -lt 12) { Write-Log 'headroom under 12 GB - a demanding game can commit 10 GB on its own' 'warn' }
     }
     Build-ProcessList
     Update-Status -IncludeSlow
@@ -775,7 +926,7 @@ $BtnCleanApply.Add_Click({ Start-Tool 'cleanup.ps1' @('-Apply','-IncludeSystem')
 $BtnReport.Add_Click({
     $p = Join-Path $Root 'fault-report.html'
     if (Test-Path $p) { Start-Process $p; Write-Log 'opened fault-report.html' 'ok' }
-    else { Write-Log 'fault-report.html not found' 'err' }
+    else { Write-Log 'no fault-report.html in the tools folder - it is a personal write-up and not part of the repo' 'warn' }
 })
 $BtnFolder.Add_Click({ Start-Process explorer.exe $Root; Write-Log 'opened tools folder' })
 $BtnClearLog.Add_Click({ $TxtLog.Clear() })

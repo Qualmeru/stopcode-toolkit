@@ -19,10 +19,21 @@ Add-Type -AssemblyName System.Drawing
 $Root     = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $Target   = Join-Path $Root 'ControlPanel.ps1'
 $IconPath = Join-Path $Root 'ControlPanel.ico'
-$LinkName = 'ZenBook Control Panel.lnk'
+$LinkName = 'stopcode-toolkit Control Panel.lnk'
 $Desktop  = Join-Path ([Environment]::GetFolderPath('Desktop')) $LinkName
-$StartDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'ZenBook Tools'
+$StartDir = Join-Path ([Environment]::GetFolderPath('Programs')) 'Stopcode Toolkit'
 $StartLnk = Join-Path $StartDir $LinkName
+
+# Earlier versions were named after the laptop they were written on.
+$OldDir   = Join-Path ([Environment]::GetFolderPath('Programs')) 'ZenBook Tools'
+$OldLinks = @((Join-Path ([Environment]::GetFolderPath('Desktop')) 'ZenBook Control Panel.lnk'),
+              (Join-Path $OldDir 'ZenBook Control Panel.lnk'))
+function Remove-OldLinks {
+    foreach ($p in $OldLinks) {
+        if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force; Write-Host "removed old $p" }
+    }
+    if ((Test-Path $OldDir) -and -not (Get-ChildItem $OldDir -Force)) { Remove-Item -LiteralPath $OldDir -Force }
+}
 
 if ($Remove) {
     foreach ($p in @($Desktop, $StartLnk)) {
@@ -31,6 +42,7 @@ if ($Remove) {
     if ((Test-Path $StartDir) -and -not (Get-ChildItem $StartDir -Force)) {
         Remove-Item -LiteralPath $StartDir -Force
     }
+    Remove-OldLinks
     return
 }
 
@@ -137,10 +149,11 @@ function New-Link {
     Write-Host ("shortcut: {0}" -f $Path) -ForegroundColor Green
 }
 
+Remove-OldLinks
 New-Link $Desktop
 New-Link $StartLnk
 
 Write-Host ''
 Write-Host '  To pin it to the taskbar (Windows does not allow this to be scripted):' -ForegroundColor Cyan
-Write-Host '    press Start, type "ZenBook", right-click the result, Pin to taskbar'
+Write-Host '    press Start, type "stopcode", right-click the result, Pin to taskbar'
 Write-Host ''

@@ -120,6 +120,21 @@ foreach ($b in $bases) {
 }
 $mods = @($mods | Sort-Object Base)
 
+# Without elevation Windows returns every base as null, so nothing can resolve.
+if (-not $mods.Count) {
+    $lines += ''
+    $lines += 'No driver addresses visible - Windows hides them from non-elevated'
+    $lines += 'processes. Run this from an elevated (administrator) PowerShell.'
+    Set-Content -LiteralPath $out -Value $lines -Encoding utf8
+    $lines | ForEach-Object { Write-Host $_ }
+    Start-Sleep -Seconds 5
+    return
+}
+if (-not $Address) {
+    $lines += ''
+    $lines += 'Usage: .\resolve-kernel-addr.ps1 0xfffff80731cf67b0 [more addresses...]'
+}
+
 $lines += ('loaded kernel modules: {0}' -f $mods.Count)
 $lines += ('lowest base  : 0x{0:x16}  {1}' -f $mods[0].Base, $mods[0].Name)
 $lines += ('highest base : 0x{0:x16}  {1}' -f $mods[-1].Base, $mods[-1].Name)
