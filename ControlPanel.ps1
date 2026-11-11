@@ -355,7 +355,7 @@ $xaml = @'
               </StackPanel>
               <TextBlock x:Name="TxtMon" Style="{StaticResource Sub}" Text="--"/>
               <WrapPanel>
-                <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines (decode, encode, processing). Video-engine timeouts (0x141) happen there, so this shows what might be triggering them. If the background logger has not recorded anything yet, it samples live for a minute first." />
+                <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines (decode, encode, processing). Video-engine timeouts (0x141) happen there, so this shows what might be triggering them. Offers to install the video logger and the dump watcher if either is missing." />
                 <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch the GPU for five minutes (temperature, power and throttling on NVIDIA; engine load and memory on other GPUs), and report whether any new faults occurred." />
                 <Button x:Name="BtnMonRemove"   Content="Remove monitoring" Margin="0,0,8,8"
                         ToolTip="Unregister both background tasks. Collected data in diag is left alone. Installing is offered automatically when a tool needs a task that is missing."/>
@@ -1027,7 +1027,7 @@ $BtnFaultBaseline.Add_Click({ Start-Tool 'crash-count.ps1' @('-Reset') -Label 'c
 $BtnFaultAnalyze.Add_Click({
     # Same pattern as the video report: offer the missing piece rather than
     # letting the user find out later that nothing was being recorded.
-    if (-not (Get-ScheduledTask -TaskName 'KernelDumpWatcher' -ErrorAction SilentlyContinue)) {
+    if (-not (Get-TaskState 'KernelDumpWatcher')) {
         Write-Log 'dump watcher is not installed' 'warn'
         $answer = [System.Windows.MessageBox]::Show(
             ("The dump watcher is not installed." + [Environment]::NewLine + [Environment]::NewLine +
@@ -1046,35 +1046,70 @@ $BtnFaultAnalyze.Add_Click({
     }
     Start-Tool 'collect-crash.ps1' -Elevated -Label 'collect-crash'
 })
+# Install several monitoring tasks from ONE elevated window, so it costs a
+# single UAC prompt. Each script's -Install sees it is already elevated and
+# registers its task directly.
+function Install-MonitoringTasks {
+    param([string[]]$Scripts)
+    $cmds = foreach ($s in $Scripts) {
+        "& '{0}' -Install" -f ((Join-Path $Root $s) -replace "'", "''")
+    }
+    $cmd = ($cmds -join '; ') + "; Write-Host ''; Write-Host 'Done - you can close this window.' -ForegroundColor Green"
+    try {
+        Start-Process powershell.exe -Verb RunAs -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-NoExit','-Command', $cmd) | Out-Null
+        Write-Log ('installing: {0}' -f ($Scripts -join ', ')) 'ok'
+        return $true
+    } catch {
+        Write-Log 'install cancelled at the UAC prompt' 'warn'
+        return $false
+    }
+}
+
 # The report is only meaningful if something has been logging, so check the
-# task exists before opening a window that would just say "no log yet".
+# logger exists before opening a window that would just say "no log yet".
+# The dump watcher is the other half of the monitoring (when a fault happened
+# vs what was using the engine), so it is offered here too if it is missing.
 $BtnVideoReport.Add_Click({
-    $task = Get-ScheduledTask -TaskName 'VideoEngineLogger' -ErrorAction SilentlyContinue
+    $loggerState  = Get-TaskState 'VideoEngineLogger'
+    $watcherState = Get-TaskState 'KernelDumpWatcher'
     $csv  = Join-Path $Root 'diag\video-engine.csv'
     $rows = 0
     if (Test-Path $csv) { $rows = [Math]::Max(0, (Get-Content $csv -ErrorAction SilentlyContinue).Count - 1) }
 
-    if (-not $task) {
-        Write-Log 'video-engine logger is not installed' 'warn'
+    $missing = @(); $what = @()
+    if (-not $loggerState) {
+        $missing += 'log-video-engine.ps1'
+        $what += "-  Video-engine logger: records which process uses which GPU's video engines, every 20 seconds. That is what this report is built from."
+    }
+    if (-not $watcherState) {
+        $missing += 'watch-dumps.ps1'
+        $what += "-  Dump watcher: parses each new crash dump, names the driver that faulted, and records live kernel events with the time they happened."
+    }
+
+    if ($missing.Count) {
+        Write-Log ('not installed: {0}' -f (($missing -replace '\.ps1$', '') -join ', ')) 'warn'
+        $nl = [Environment]::NewLine
         $answer = [System.Windows.MessageBox]::Show(
-            ("The video-engine logger is not installed, so there is nothing to report on yet." + [Environment]::NewLine + [Environment]::NewLine +
-             "It records which process uses which GPU's video engines, every 20 seconds. That is what identifies whatever is driving Intel's video engine when a 0x141 fault happens." + [Environment]::NewLine + [Environment]::NewLine +
-             "Install it now? It starts at logon and needs one UAC prompt."),
-            'Logger not installed',
+            ("Not installed yet:" + $nl + $nl + ($what -join ($nl + $nl)) + $nl + $nl +
+             "Install now? They start at logon and run in the background. One UAC prompt."),
+            'Monitoring not installed',
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Question)
 
         if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
-            Start-Tool 'log-video-engine.ps1' @('-Install') -Label 'logger install'
-            Write-Log 'once installed, give it a while to collect before asking for a report'
-        } else {
+            $ok = Install-MonitoringTasks -Scripts $missing
+            if ($ok -and -not $loggerState) {
+                Write-Log 'the logger starts empty - give it a while to collect before asking for a report'
+                return
+            }
+        } elseif (-not $loggerState) {
             Write-Log 'logger not installed - report skipped'
+            return
         }
-        return
     }
 
-    if ($task.State -ne 'Running') {
-        Write-Log ("logger task exists but is {0} - the report may be stale" -f $task.State) 'warn'
+    if ($loggerState -and $loggerState -ne 'Running') {
+        Write-Log ("logger task exists but is {0} - the report may be stale" -f $loggerState) 'warn'
     }
     if ($rows -eq 0) {
         Write-Log 'logger is installed but has recorded nothing yet - try again later' 'warn'

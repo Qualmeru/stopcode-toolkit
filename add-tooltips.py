@@ -46,8 +46,8 @@ BUTTONS = {
                        "they can be read. Needs administrator rights.",
     "BtnVideoReport": "Show which programs have been using each GPU's video engines "
                       "(decode, encode, processing). Video-engine timeouts (0x141) happen "
-                      "there, so this shows what might be triggering them. If the background "
-                      "logger has not recorded anything yet, it samples live for a minute first.",
+                      "there, so this shows what might be triggering them. Offers to install "
+                      "the video logger and the dump watcher if either is missing.",
     "BtnGpuMonitor": "Watch the GPU for five minutes (temperature, power and throttling "
                      "on NVIDIA; engine load and memory on other GPUs), and report "
                      "whether any new faults occurred.",
