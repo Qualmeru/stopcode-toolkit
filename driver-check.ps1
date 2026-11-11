@@ -122,6 +122,16 @@ function Get-CachedResult {
     return $s.Search($criteria)
 }
 
+# The installed BIOS version (e.g. 1.19), for judging system firmware updates.
+$script:BiosVersion = ''; $script:BiosText = ''
+try {
+    $b = Get-CimInstance Win32_BIOS -ErrorAction Stop
+    if ($null -ne $b.SystemBiosMajorVersion -and $b.SystemBiosMajorVersion -lt 255) {
+        $script:BiosVersion = '{0}.{1}' -f $b.SystemBiosMajorVersion, $b.SystemBiosMinorVersion
+    }
+    $script:BiosText = (($b.SMBIOSBIOSVersion -replace '\s+', ' ') -replace '\(\s*(.*?)\s*\)', '($1)').Trim()
+} catch { }
+
 function Get-Offers {
     param($Result)
     $list = @()
@@ -132,9 +142,31 @@ function Get-Offers {
         try { $model = $u.DriverModel } catch { }
         try { $mfr   = $u.DriverManufacturer } catch { }
         try { $vdate = $u.DriverVerDate } catch { }
-        $cur = Find-Installed -Model $model
+        $class = ''
+        try { $class = $u.DriverClass } catch { }
         $offered = Get-OfferedVersion $u
-        $verdict = Compare-Version -Offered $offered -Current $(if ($cur) { $cur.DriverVersion } else { '' })
+        $curVer = ''; $curDate = $null; $note = ''
+
+        if ($class -eq 'Firmware') {
+            # Firmware devices all show Microsoft's generic firmware driver
+            # (10.0.x), which says nothing about the firmware itself. For the
+            # system firmware the real figure is the BIOS version; other
+            # firmware (docks, controllers) cannot be compared from here.
+            if ($model -match 'System Firmware' -and $script:BiosVersion) {
+                $curVer  = $script:BiosVersion
+                $short   = ($offered -split '\.')[0..1] -join '.'   # 1.19.0.0 -> 1.19
+                $verdict = Compare-Version -Offered $short -Current $curVer
+                $note    = 'BIOS / UEFI firmware update - compared with the installed BIOS ({0})' -f $script:BiosText
+            } else {
+                $verdict = 'unknown'
+                $note    = 'device firmware - Windows does not expose its installed version, judge by the title'
+            }
+        } else {
+            $cur = Find-Installed -Model $model
+            $curVer  = if ($cur) { $cur.DriverVersion } else { '' }
+            $curDate = if ($cur) { $cur.DriverDate } else { $null }
+            $verdict = Compare-Version -Offered $offered -Current $curVer
+        }
 
         $list += [pscustomobject]@{
             Index     = $i
@@ -145,9 +177,10 @@ function Get-Offers {
             Mfr       = $mfr
             Offered   = $offered
             OfferDate = $vdate
-            Current   = $(if ($cur) { $cur.DriverVersion } else { '' })
-            CurDate   = $(if ($cur) { $cur.DriverDate } else { $null })
+            Current   = $curVer
+            CurDate   = $curDate
             Verdict   = $verdict
+            Note      = $note
             SizeMB    = [math]::Round($u.MaxDownloadSize / 1MB, 1)
         }
     }
@@ -187,7 +220,9 @@ function Show-Offers {
             'same'    { 'same version already installed' }
             default   { 'could not match to an installed device - judge by the title' }
         }
+        if ($o.Note -and $o.Verdict -eq 'unknown') { $note = $o.Note }
         Write-Host ('        {0}' -f $note) -ForegroundColor DarkGray
+        if ($o.Note -and $o.Verdict -ne 'unknown') { Write-Host ('        {0}' -f $o.Note) -ForegroundColor DarkGray }
         if ($o.OfferDate -and $o.OfferDate.Year -lt (Get-Date).Year - 5) {
             Write-Host ('        driver dated {0} - very old, unlikely to add anything' -f $o.OfferDate.ToString('yyyy-MM-dd')) -ForegroundColor DarkGray
         }
