@@ -348,6 +348,8 @@ $xaml = @'
               <WrapPanel>
                 <Button x:Name="BtnVideoReport" Content="Video-engine report" ToolTip="Show which programs have been using each GPU's video engines (decode, encode, processing). Video-engine timeouts (0x141) happen there, so this shows what might be triggering them. If the background logger has not recorded anything yet, it samples live for a minute first." />
                 <Button x:Name="BtnGpuMonitor"  Content="GPU monitor (5 min)" Margin="0,0,8,8" ToolTip="Watch the GPU for five minutes (temperature, power and throttling on NVIDIA; engine load and memory on other GPUs), and report whether any new faults occurred." />
+                <Button x:Name="BtnMonRemove"   Content="Remove monitoring" Margin="0,0,8,8"
+                        ToolTip="Unregister both background tasks. Collected data in diag is left alone. Installing is offered automatically when a tool needs a task that is missing."/>
               </WrapPanel>
             </StackPanel>
           </Border>
@@ -438,7 +440,7 @@ foreach ($n in @('TxtMachine','TxtCommit','TxtHead','TxtGpu','TxtFaults','BtnRef
                  'RbVr','RbFlat','BtnPreClean','BtnPreBrowse','BtnPreWork','BtnPreNone',
                  'PnlProcs','BtnApply','BtnRescan','BtnRestoreVr','TxtSel',
                  'TxtFaultDetail','BtnFaultCount','BtnFaultBaseline','BtnFaultAnalyze',
-                 'TxtMon','BtnVideoReport','BtnGpuMonitor',
+                 'TxtMon','BtnVideoReport','BtnGpuMonitor','BtnMonRemove',
                  'TxtDisk','BtnCleanScan','BtnCleanApply',
                  'BtnDriverScan','BtnDriverInstall','BtnDriverAge',
                  'BtnReport','BtnFolder','TxtLog','BtnClearLog','BtnCopyLog')) {
@@ -493,6 +495,39 @@ public static class SysInfo {
   }
 }
 '@ -ErrorAction SilentlyContinue
+
+# Names that have proved they will not close, remembered between runs so the
+# presets stop wasting attempts on them. Shared with gaming-mode.ps1.
+$script:WontCloseFile = Join-Path $Root 'diag\wont-close.txt'
+
+function Get-WontClose {
+    if (Test-Path $script:WontCloseFile) {
+        return @(Get-Content $script:WontCloseFile -ErrorAction SilentlyContinue |
+                 ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    return @()
+}
+
+function Add-WontClose {
+    param([string]$Name)
+    $all = @(Get-WontClose) + $Name | Select-Object -Unique
+    New-Item -ItemType Directory -Path (Split-Path $script:WontCloseFile) -Force | Out-Null
+    Set-Content -LiteralPath $script:WontCloseFile -Value $all -Encoding utf8
+}
+
+function Test-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    (New-Object Security.Principal.WindowsPrincipal $id).IsInRole(
+        [Security.Principal.WindowsBuiltinRole]::Administrator)
+}
+
+function Get-ServiceProcessMap {
+    $m = @{}
+    Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessId -gt 0 } |
+        ForEach-Object { $m[[int]$_.ProcessId] = $_.Name }
+    return $m
+}
 
 function Get-Commit {
     try {
@@ -637,28 +672,43 @@ function Update-SlowStatus {
         $roots = @("$env:ProgramData\Microsoft\Windows\WER\ReportQueue",
                    "$env:ProgramData\Microsoft\Windows\WER\ReportArchive")
         $counts = @{}
+        $folders = @()
         foreach ($r in $roots) {
             if (-not (Test-Path $r)) { continue }
-            Get-ChildItem $r -Directory -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -like 'Kernel_*' } | ForEach-Object {
-                    if ($_.Name -match '^Kernel_([0-9a-fA-F]+)_') {
-                        $k = $matches[1].ToLower()
-                        if ($counts.ContainsKey($k)) { $counts[$k]++ } else { $counts[$k] = 1 }
-                    }
-                }
+            $folders += @(Get-ChildItem $r -Directory -ErrorAction SilentlyContinue |
+                          Where-Object { $_.Name -like 'Kernel_*' } | Select-Object -ExpandProperty Name)
+        }
+        $folders = @($folders | Select-Object -Unique)
+        $codeOf = { param($n) if ($n -match '^Kernel_([0-9a-fA-F]+)_') { $matches[1].ToLower() } else { 'unknown' } }
+        foreach ($n in $folders) {
+            $k = & $codeOf $n
+            if ($counts.ContainsKey($k)) { $counts[$k]++ } else { $counts[$k] = 1 }
         }
         # Every bugcheck code counts, whatever this PC's problem happens to be.
-        $total = 0; foreach ($v in $counts.Values) { $total += $v }
+        $total = $folders.Count
 
         # New since the baseline crash-count.ps1 saved, across all codes.
         $baseFile = Join-Path $Root 'crash-baseline.json'
         $newBy = @{}; $newTotal = 0; $hasBase = Test-Path $baseFile
         if ($hasBase) {
             $b = Get-Content $baseFile -Raw | ConvertFrom-Json
-            foreach ($k in $counts.Keys) {
-                $was = if ($b.PSObject.Properties[$k]) { [int]$b.$k } else { 0 }
-                $d = $counts[$k] - $was
-                if ($d -gt 0) { $newBy[$k] = $d; $newTotal += $d }
+            if ($b.PSObject.Properties['Seen']) {
+                # Current format: the report folders already seen. Anything else
+                # is new, even if WER has since deleted old reports to make room.
+                $seen = @{}; foreach ($n in @($b.Seen)) { $seen[$n] = $true }
+                foreach ($n in $folders) {
+                    if (-not $seen.ContainsKey($n)) {
+                        $k = & $codeOf $n
+                        $newBy[$k] = 1 + [int]$newBy[$k]; $newTotal++
+                    }
+                }
+            } else {
+                # Older baselines stored a count per code.
+                foreach ($k in $counts.Keys) {
+                    $was = if ($b.PSObject.Properties[$k]) { [int]$b.$k } else { 0 }
+                    $d = $counts[$k] - $was
+                    if ($d -gt 0) { $newBy[$k] = $d; $newTotal += $d }
+                }
             }
         }
 
@@ -761,9 +811,16 @@ function Build-ProcessList {
         Where-Object { $_.CommitMB -ge 150 } |
         Sort-Object CommitMB -Descending
 
+    $stubborn = @(Get-WontClose)
+    $svcMapUi = Get-ServiceProcessMap
+
     foreach ($c in $cands) {
-        $isRec = $Recommend.ContainsKey($c.Name)
-        $note  = if ($isRec) { $Recommend[$c.Name] }
+        $isStubborn = $stubborn -contains $c.Name
+        $isService  = @($c.Ids | Where-Object { $svcMapUi.ContainsKey($_) }).Count -gt 0
+        $isRec = $Recommend.ContainsKey($c.Name) -and -not $isStubborn
+        $note  = if ($isStubborn) { 'skipped - would not close before' }
+                 elseif ($isService) { 'service - needs the panel run as admin' }
+                 elseif ($isRec) { $Recommend[$c.Name] }
                  elseif ($Caution.ContainsKey($c.Name)) { 'keep? ' + $Caution[$c.Name] }
                  else { '' }
 
@@ -806,8 +863,13 @@ function Build-ProcessList {
             if ($mono) { $t.FontFamily = 'Consolas' }
             $t
         }
-        $nameCol = if ($isRec) { '#5BC08C' } elseif ($Caution.ContainsKey($c.Name)) { '#E0A93A' } else { '#E7ECF3' }
-        $t1 = & $mk ($(if ($isRec) { '* ' } else { '  ' }) + $c.Name) $nameCol 12 $true
+        $nameCol = if ($isStubborn) { '#78838F' }
+                   elseif ($isService) { '#4FB8C0' }
+                   elseif ($isRec) { '#5BC08C' }
+                   elseif ($Caution.ContainsKey($c.Name)) { '#E0A93A' }
+                   else { '#E7ECF3' }
+        $prefix = if ($isRec) { '* ' } elseif ($isStubborn) { 'x ' } else { '  ' }
+        $t1 = & $mk ($prefix + $c.Name) $nameCol 12 $true
         $t2 = & $mk ('x' + $c.Count) '#78838F' 11 $true
         $sz = if ($c.CommitMB -ge 1024) { '{0:N1} GB' -f ($c.CommitMB/1024) } else { '{0} MB' -f $c.CommitMB }
         $t3 = & $mk $sz '#9EA9B8' 11.5 $true
@@ -886,20 +948,57 @@ $BtnApply.Add_Click({
     if (-not $sel) { Write-Log 'nothing selected to close'; Update-Status -IncludeSlow; return }
 
     $before = Get-Commit
+    $svcMap = Get-ServiceProcessMap
+    $admin  = Test-Admin
+
+    # Service-backed processes cannot be closed with Stop-Process; separate them
+    # out before wasting an attempt and reporting a failure that was never going
+    # to succeed.
+    $plain = @()
     foreach ($r in $sel) {
-        $c = $r.Info
-        foreach ($procId in $c.Ids) {
+        $svcNames = @($r.Info.Ids | Where-Object { $svcMap.ContainsKey($_) } | ForEach-Object { $svcMap[$_] } | Select-Object -Unique)
+        if (-not $svcNames) { $plain += $r; continue }
+        if (-not $admin) {
+            Write-Log ("{0} is a service ({1}) - skipped, needs an elevated run" -f $r.Info.Name, ($svcNames -join ', ')) 'warn'
+            continue
+        }
+        foreach ($s in $svcNames) {
+            try {
+                Stop-Service -Name $s -Force -ErrorAction Stop
+                Write-Log ("stopped service {0} ({1}, ~{2} MB)" -f $s, $r.Info.Name, $r.Info.CommitMB) 'ok'
+            } catch {
+                Write-Log ("could not stop service {0}" -f $s) 'warn'
+                Add-WontClose $r.Info.Name
+            }
+        }
+    }
+
+    foreach ($r in $plain) {
+        foreach ($procId in $r.Info.Ids) {
             $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
             if ($p) { try { [void]$p.CloseMainWindow() } catch { } }
         }
     }
     Start-Sleep -Milliseconds 1800
-    foreach ($r in $sel) {
+    foreach ($r in $plain) {
         $left = @($r.Info.Ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
         foreach ($p in $left) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+    # Let Windows reap them before counting. Checking immediately reported
+    # failures for apps that were in fact closing.
+    Start-Sleep -Milliseconds 900
+    foreach ($r in $plain) {
         $still = @($r.Info.Ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }).Count
-        if ($still -eq 0) { Write-Log ("closed {0} (~{1} MB)" -f $r.Info.Name, $r.Info.CommitMB) 'ok' }
-        else { Write-Log ("{0}: {1} process(es) would not close" -f $r.Info.Name, $still) 'warn' }
+        if ($still -eq 0) {
+            Write-Log ("closed {0} (~{1} MB)" -f $r.Info.Name, $r.Info.CommitMB) 'ok'
+            continue
+        }
+        if (@(Get-Process -Name $r.Info.Name -ErrorAction SilentlyContinue).Count -gt 0) {
+            Write-Log ("{0} respawns immediately - skipping it from now on" -f $r.Info.Name) 'warn'
+        } else {
+            Write-Log ("{0}: {1} process(es) refused to close" -f $r.Info.Name, $still) 'warn'
+        }
+        Add-WontClose $r.Info.Name
     }
     Start-Sleep -Milliseconds 800
     $after = Get-Commit
@@ -914,9 +1013,73 @@ $BtnApply.Add_Click({
 $BtnRestoreVr.Add_Click({ Start-Tool 'gaming-mode.ps1' @('-Restore') -Elevated -Label 'gaming-mode -Restore' })
 $BtnFaultCount.Add_Click({ Start-Tool 'crash-count.ps1' -Label 'crash-count' })
 $BtnFaultBaseline.Add_Click({ Start-Tool 'crash-count.ps1' @('-Reset') -Label 'crash-count -Reset' })
-$BtnFaultAnalyze.Add_Click({ Start-Tool 'collect-crash.ps1' -Elevated -Label 'collect-crash' })
-$BtnVideoReport.Add_Click({ Start-Tool 'log-video-engine.ps1' @('-Report') -Label 'video-engine report' })
+$BtnFaultAnalyze.Add_Click({
+    # Same pattern as the video report: offer the missing piece rather than
+    # letting the user find out later that nothing was being recorded.
+    if (-not (Get-ScheduledTask -TaskName 'KernelDumpWatcher' -ErrorAction SilentlyContinue)) {
+        Write-Log 'dump watcher is not installed' 'warn'
+        $answer = [System.Windows.MessageBox]::Show(
+            ("The dump watcher is not installed." + [Environment]::NewLine + [Environment]::NewLine +
+             "It parses each new crash dump and tells you which driver faulted, and records live kernel events with the time they happened. Without it, a fault leaves little you can act on - and the evidence expires at the next restart." + [Environment]::NewLine + [Environment]::NewLine +
+             "Install it now? It starts at logon and needs one UAC prompt." + [Environment]::NewLine + [Environment]::NewLine +
+             "Choosing No still collects whatever dumps already exist."),
+            'Watcher not installed',
+            [System.Windows.MessageBoxButton]::YesNoCancel,
+            [System.Windows.MessageBoxImage]::Question)
+
+        if ($answer -eq [System.Windows.MessageBoxResult]::Cancel) { Write-Log 'cancelled'; return }
+        if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+            Start-Tool 'watch-dumps.ps1' @('-Install') -Label 'watcher install'
+            return
+        }
+    }
+    Start-Tool 'collect-crash.ps1' -Elevated -Label 'collect-crash'
+})
+# The report is only meaningful if something has been logging, so check the
+# task exists before opening a window that would just say "no log yet".
+$BtnVideoReport.Add_Click({
+    $task = Get-ScheduledTask -TaskName 'VideoEngineLogger' -ErrorAction SilentlyContinue
+    $csv  = Join-Path $Root 'diag\video-engine.csv'
+    $rows = 0
+    if (Test-Path $csv) { $rows = [Math]::Max(0, (Get-Content $csv -ErrorAction SilentlyContinue).Count - 1) }
+
+    if (-not $task) {
+        Write-Log 'video-engine logger is not installed' 'warn'
+        $answer = [System.Windows.MessageBox]::Show(
+            ("The video-engine logger is not installed, so there is nothing to report on yet." + [Environment]::NewLine + [Environment]::NewLine +
+             "It records which process uses which GPU's video engines, every 20 seconds. That is what identifies whatever is driving Intel's video engine when a 0x141 fault happens." + [Environment]::NewLine + [Environment]::NewLine +
+             "Install it now? It starts at logon and needs one UAC prompt."),
+            'Logger not installed',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question)
+
+        if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+            Start-Tool 'log-video-engine.ps1' @('-Install') -Label 'logger install'
+            Write-Log 'once installed, give it a while to collect before asking for a report'
+        } else {
+            Write-Log 'logger not installed - report skipped'
+        }
+        return
+    }
+
+    if ($task.State -ne 'Running') {
+        Write-Log ("logger task exists but is {0} - the report may be stale" -f $task.State) 'warn'
+    }
+    if ($rows -eq 0) {
+        Write-Log 'logger is installed but has recorded nothing yet - try again later' 'warn'
+        return
+    }
+
+    Write-Log ("opening report over {0} recorded samples" -f $rows)
+    Start-Tool 'log-video-engine.ps1' @('-Report') -Label 'video-engine report'
+})
 $BtnGpuMonitor.Add_Click({ Start-Tool 'gpu-monitor.ps1' @('-Minutes','5') -Label 'gpu-monitor' })
+
+$BtnMonRemove.Add_Click({
+    Write-Log 'removing both monitoring tasks - collected data in diag is kept' 'warn'
+    Start-Tool 'watch-dumps.ps1'      @('-Uninstall') -Label 'watcher remove'
+    Start-Tool 'log-video-engine.ps1' @('-Uninstall') -Label 'logger remove'
+})
 $BtnDriverScan.Add_Click({ Start-Tool 'driver-check.ps1' -Label 'driver scan' })
 $BtnDriverInstall.Add_Click({ Start-Tool 'driver-check.ps1' @('-Install') -Label 'driver install' })
 $BtnDriverAge.Add_Click({ Start-Tool 'driver-check.ps1' @('-Inventory') -Label 'driver inventory' })

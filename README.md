@@ -143,6 +143,76 @@ Icons are vector `Path` geometry, so they stay sharp at any DPI.
 
 ---
 
+## Setting it up on a machine
+
+Clone it anywhere; the scripts locate themselves with `$PSScriptRoot`, so there
+is nothing to configure.
+
+```
+git clone https://github.com/Qualmeru/stopcode-toolkit.git
+cd stopcode-toolkit
+```
+
+### Background monitoring
+
+Two pieces run continuously and are what make the diagnosis possible later —
+by the time you notice a fault, the evidence has usually expired. Neither is
+installed by cloning; each registers its own scheduled task:
+
+```
+powershell -ExecutionPolicy Bypass -File .\watch-dumps.ps1       -Install
+powershell -ExecutionPolicy Bypass -File .\log-video-engine.ps1  -Install
+```
+
+| Task | What it does |
+|---|---|
+| `KernelDumpWatcher` | Elevated, starts at logon. Parses new minidumps and notifies with the faulting driver. Records live kernel events silently, with real occurrence times. |
+| `VideoEngineLogger` | Unelevated, starts at logon. Samples which process uses which GPU's video engines, every 20 seconds. |
+
+The watcher needs elevation because `C:\Windows\Minidump` and the WER folders
+are readable only by administrators. The logger does not.
+
+Check they are running:
+
+```
+powershell -Command "Get-ScheduledTask KernelDumpWatcher,VideoEngineLogger | Select-Object TaskName,State"
+```
+
+Both take `-Uninstall` to remove.
+
+### A baseline to measure against
+
+```
+powershell -ExecutionPolicy Bypass -File .\crash-count.ps1 -Reset
+```
+
+This records which fault reports already exist, so later runs report only what
+is new. **Baselines are per-machine** — a second PC starts its own, and the two
+are not comparable.
+
+### Shortcuts, optional
+
+```
+powershell -ExecutionPolicy Bypass -File .\make-shortcut.ps1
+```
+
+Draws an icon and places Desktop and Start Menu shortcuts for the control
+panel. Windows does not allow taskbar pinning to be scripted; the Start Menu
+entry makes that a right-click.
+
+### Removing everything
+
+```
+powershell -ExecutionPolicy Bypass -File .\watch-dumps.ps1       -Uninstall
+powershell -ExecutionPolicy Bypass -File .\log-video-engine.ps1  -Uninstall
+powershell -ExecutionPolicy Bypass -File .\make-shortcut.ps1     -Remove
+```
+
+Nothing else is written outside the clone: all state and output lives in
+`diag\`, which is gitignored.
+
+---
+
 ## Requirements
 
 - Windows 10 or 11
