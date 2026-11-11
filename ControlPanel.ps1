@@ -48,11 +48,20 @@ $Caution = @{
     'Docker Desktop'='stops your containers'; 'com.docker.backend'='stops your containers'
 }
 $Browsers = @('chrome','msedge','firefox','brave','opera','vivaldi')
+# Apps you work in, kept open by the Work preset: editors and IDEs, AI
+# assistants, databases and their tools, and chat/mail.
+$WorkApps = @(
+    'Code','devenv','Ssms','copilot-runtime','copilot-language-server','Copilot',
+    'sqlservr','mongod','postgres','mysqld','redis-server',
+    'idea64','rider64','pycharm64','webstorm64','datagrip64','clion64','goland64','jetbrains-toolbox',
+    'Slack','ms-teams','Teams','OUTLOOK','olk','Notepad++',
+    'msedgewebview2'   # Teams, new Outlook and Copilot draw their windows with it
+)
 foreach ($b in @('brave','opera','vivaldi')) { $Recommend[$b] = 'browser; restores tabs' }
 $Presets = @{
     'clean'  = @()
     'browse' = $Browsers
-    'work'   = $Browsers + @('Code')
+    'work'   = $Browsers + $WorkApps
 }
 
 # Bugcheck codes Windows records in WER kernel reports, for naming them on the
@@ -297,7 +306,7 @@ $xaml = @'
             <Rectangle Width="1" Fill="#28313D" Margin="6,2,14,2"/>
             <Button x:Name="BtnPreClean"  Content="Clean" ToolTip="Tick every recommended app. Frees the most memory, but closes your browser too." />
             <Button x:Name="BtnPreBrowse" Content="Browse" ToolTip="Tick everything recommended except your web browsers (Chrome, Edge, Firefox, Brave, Opera, Vivaldi), so you can still look things up while playing." />
-            <Button x:Name="BtnPreWork"   Content="Work" ToolTip="Keep your web browsers and VS Code open. Frees the least - check the headroom reading before using this with a demanding game." />
+            <Button x:Name="BtnPreWork"   Content="Work" ToolTip="Keep your web browsers and work apps open: VS Code, Visual Studio, Copilot, SQL Server and SSMS, other databases, JetBrains IDEs, Slack, Teams and Outlook. Frees the least - check the headroom reading before using this with a demanding game." />
             <Button x:Name="BtnPreNone"   Content="None" ToolTip="Untick everything. Nothing will be closed when you press Apply." />
           </StackPanel>
 
@@ -908,7 +917,9 @@ function Set-Preset {
         $r.Box.IsChecked = ($r.Recommended -and ($keep -notcontains $r.Info.Name))
     }
     Update-SelectionText
-    Write-Log ("preset '{0}' applied{1}" -f $Name, $(if ($keep.Count) { ' - keeping ' + ($keep -join ', ') } else { '' }))
+    # Only name what is actually running, not the whole keep list.
+    $kept = @($script:Rows | Where-Object { $_.Recommended -and ($keep -contains $_.Info.Name) } | ForEach-Object { $_.Info.Name })
+    Write-Log ("preset '{0}' applied{1}" -f $Name, $(if ($kept.Count) { ' - keeping ' + ($kept -join ', ') } else { '' }))
 }
 
 # ------------------------------------------------------------------- actions

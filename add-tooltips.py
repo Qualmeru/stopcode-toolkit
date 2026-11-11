@@ -26,8 +26,10 @@ BUTTONS = {
     "BtnPreBrowse": "Tick everything recommended except your web browsers (Chrome, Edge, "
                     "Firefox, Brave, Opera, Vivaldi), so you can still look things up "
                     "while playing.",
-    "BtnPreWork": "Keep your web browsers and VS Code open. Frees the least - check the "
-                  "headroom reading before using this with a demanding game.",
+    "BtnPreWork": "Keep your web browsers and work apps open: VS Code, Visual Studio, "
+                  "Copilot, SQL Server and SSMS, other databases, JetBrains IDEs, Slack, "
+                  "Teams and Outlook. Frees the least - check the headroom reading before "
+                  "using this with a demanding game.",
     "BtnPreNone": "Untick everything. Nothing will be closed when you press Apply.",
     "BtnApply": "Apply the VR choice, then close every ticked app. Each one is asked "
                 "to close normally first so it can save; only apps that ignore that "

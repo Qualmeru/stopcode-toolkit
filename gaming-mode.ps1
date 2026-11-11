@@ -140,13 +140,22 @@ if ($Games) {
 }
 
 # Keep-presets: start from the recommended set, then spare the named processes.
-# Browsers and VS Code are usually the biggest things the recommended set
+# Browsers and work apps are usually the biggest things the recommended set
 # frees, so they are the ones worth a dedicated preset.
 $Browsers = @('chrome','msedge','firefox','brave','opera','vivaldi')
+# Apps you work in, kept open by the Work preset: editors and IDEs, AI
+# assistants, databases and their tools, and chat/mail.
+$WorkApps = @(
+    'Code','devenv','Ssms','copilot-runtime','copilot-language-server','Copilot',
+    'sqlservr','mongod','postgres','mysqld','redis-server',
+    'idea64','rider64','pycharm64','webstorm64','datagrip64','clion64','goland64','jetbrains-toolbox',
+    'Slack','ms-teams','Teams','OUTLOOK','olk','Notepad++',
+    'msedgewebview2'   # Teams, new Outlook and Copilot draw their windows with it
+)
 $Presets = @{
     'clean'  = @{ Keep = @();                       Desc = 'close everything recommended' }
     'browse' = @{ Keep = $Browsers;                 Desc = 'keep web browsers for looking things up' }
-    'work'   = @{ Keep = $Browsers + @('Code');     Desc = 'keep web browsers and VS Code' }
+    'work'   = @{ Keep = $Browsers + $WorkApps;     Desc = 'keep browsers and work apps (Code, Copilot, SQL...)' }
 }
 
 $stateFile = Join-Path $PSScriptRoot 'diag\gaming-mode-state.json'
