@@ -54,8 +54,18 @@ function Invoke-Script {
 
 function Get-TaskProcesses {
     param([string]$Script)
-    @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    $found = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.CommandLine -match [regex]::Escape($Script) -and $_.ProcessId -ne $PID })
+    # The comma keeps an empty result an array instead of $null.
+    return ,$found
+}
+
+function Show-ProcessDiagnostics {
+    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $cmd = if ($_.CommandLine) { $_.CommandLine } else { '<command line unavailable>' }
+            Write-Host ('        pid {0} session {1}: {2}' -f $_.ProcessId, $_.SessionId, $cmd) -ForegroundColor DarkGray
+        }
 }
 
 # ------------------------------------------------------------------ preflight
@@ -112,6 +122,16 @@ foreach ($t in $tasks) {
     $info = Get-ScheduledTaskInfo -TaskName $t.Name
     Check ($state -eq 'Running') ('{0} state is {1} (last result 0x{2:X})' -f $t.Name, $state, $info.LastTaskResult)
     Check ($procs.Count -ge 1) ('{0} has {1} {2} process(es)' -f $t.Name, $procs.Count, $t.Script)
+    if (-not $procs.Count) { Show-ProcessDiagnostics }
+}
+foreach ($f in @('diag\watcher.log', 'diag\video-engine.csv')) {
+    $p = Join-Path $root $f
+    if (Test-Path -LiteralPath $p) {
+        Write-Host ('        {0}:' -f $f) -ForegroundColor DarkGray
+        Get-Content -LiteralPath $p -Tail 5 | ForEach-Object { Write-Host ('          ' + $_) -ForegroundColor DarkGray }
+    } else {
+        Write-Host ('        {0}: not written' -f $f) -ForegroundColor DarkGray
+    }
 }
 
 # The README's status command, run as documented.
