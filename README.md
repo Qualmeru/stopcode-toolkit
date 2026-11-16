@@ -119,7 +119,7 @@ continuously.
 | Script | What it does |
 |---|---|
 | `ControlPanel.ps1` | WPF GUI over everything below. Live readings, a process picker, and a log pane. |
-| `gaming-mode.ps1` | Frees memory before a game. You choose what closes; apps are asked politely first so they save state. Presets for keeping a browser or an editor open. |
+| `gaming-mode.ps1` | Frees memory before a game. You choose what closes; apps are asked politely first so they save state. Presets for keeping a browser or an editor open. Finds installed Steam games. `-Game <name>` also sets that game to High priority if it is running, or once it starts with `-Launch` (`-NoHighPriority` turns this off; `-HighPriority` does only the priority step). |
 | `driver-check.ps1` | Driver updates via the Windows Update API only — WHQL-signed, no vendor-site downloads. Compares each offer against the installed version and **flags downgrades**, which Windows itself does not. |
 | `cleanup.ps1` | Reclaims regenerable caches and stale dumps. Dry run by default. Never touches documents or game installs. |
 | `vr.ps1` | Starts and stops a VR runtime that otherwise runs permanently. |
@@ -134,7 +134,9 @@ powershell -ExecutionPolicy Bypass -File .\ControlPanel.ps1
 ```
 
 Live commit, headroom, GPU and fault readings in the header. Gaming-mode process
-picker with recommendations. Buttons for every tool, each with a tooltip
+picker with recommendations. A Steam game picker that launches the chosen game
+through Steam and raises it to High CPU priority once it is running, or does so
+for a game that is already running. Buttons for every tool, each with a tooltip
 explaining what it does and whether it needs admin. A log pane records
 everything it did.
 

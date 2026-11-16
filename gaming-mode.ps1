@@ -21,9 +21,15 @@
         .\gaming-mode.ps1 -Flat -Keep chrome,Discord   spare these whatever else is picked
         .\gaming-mode.ps1 -Flat -PowerPlan     also switch the power plan
         .\gaming-mode.ps1 -Game witcher3       target a game: sets VR/flat, checks
-                                               its GPU pinning and headroom need
-        .\gaming-mode.ps1 -Game alyx -Launch   prepare, check, then start it
-        .\gaming-mode.ps1 -Games               list the games it can see
+                                               its GPU pinning and headroom need, and
+                                               sets the game to High priority if running
+        .\gaming-mode.ps1 -Game alyx -Launch   prepare, check, start it, then set High priority
+        .\gaming-mode.ps1 -Game stray -HighPriority    only set a running game to High priority
+        .\gaming-mode.ps1 -Game stray -NoHighPriority  leave the game's priority alone
+        .\gaming-mode.ps1 -Games               list the installed Steam games it can see
+        .\gaming-mode.ps1 -Games -AsJson       the same list as JSON (used by the Control Panel)
+
+    -Game matches a profile key, a Steam app id, or part of the game's name.
 #>
 
 [CmdletBinding()]
@@ -39,8 +45,11 @@ param(
     [string[]]$Keep,
     [string]$Game,
     [switch]$Games,
+    [switch]$AsJson,
     [switch]$Launch,
     [switch]$PinGpu,
+    [switch]$HighPriority,
+    [switch]$NoHighPriority,
     [switch]$NoPreflight,
     [int]$MinimumMB = 150
 )
@@ -86,6 +95,15 @@ $GameProfiles = @(
     [pscustomobject]@{ Key='falloutnv';Name='Fallout: New Vegas';Folder='Fallout New Vegas';Exe=$null;                          VR=$false; CommitGB=2;  Measured=$false }
 )
 
+function Find-GameExe {
+    param([string]$Dir)
+    # The largest executable in the folder tree is almost always the game
+    # rather than a launcher or crash handler.
+    Get-ChildItem $Dir -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue -Depth 4 |
+        Where-Object { $_.Name -notmatch 'unins|crash|redist|vcredist|launcher|setup|helper' } |
+        Sort-Object Length -Descending | Select-Object -First 1 -ExpandProperty FullName
+}
+
 function Resolve-GameProfile {
     param($Profile, [string[]]$Libraries)
     foreach ($lib in $Libraries) {
@@ -96,45 +114,134 @@ function Resolve-GameProfile {
             $cand = Join-Path $dir $Profile.Exe
             if (Test-Path $cand) { $exe = $cand }
         }
-        if (-not $exe) {
-            # Fall back to the largest executable in the folder tree, which is
-            # almost always the game rather than a launcher or crash handler.
-            $exe = Get-ChildItem $dir -Recurse -Filter '*.exe' -ErrorAction SilentlyContinue -Depth 4 |
-                   Where-Object { $_.Name -notmatch 'unins|crash|redist|vcredist|launcher|setup|helper' } |
-                   Sort-Object Length -Descending | Select-Object -First 1 -ExpandProperty FullName
-        }
+        if (-not $exe) { $exe = Find-GameExe $dir }
         return [pscustomobject]@{
-            Key = $Profile.Key; Name = $Profile.Name; Dir = $dir; Exe = $exe
+            Key = $Profile.Key; Name = $Profile.Name; Dir = $dir; Exe = $exe; AppId = $null
             VR = $Profile.VR; CommitGB = $Profile.CommitGB; Measured = $Profile.Measured
         }
     }
     return $null
 }
 
+# Steam tools and runtimes that have app manifests but are not games.
+$NotGames = 'Redistributable|Steamworks|Proton|Steam Linux Runtime|SteamVR|Dedicated Server|Creation Kit|\bSDK\b'
+
+# Every fully installed Steam app, read from the appmanifest_*.acf files in
+# each library rather than a hardcoded list.
+function Get-SteamApps {
+    param([string[]]$Libraries)
+    foreach ($lib in $Libraries) {
+        foreach ($f in @(Get-ChildItem (Join-Path $lib 'steamapps\appmanifest_*.acf') -ErrorAction SilentlyContinue)) {
+            $t = Get-Content -LiteralPath $f.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            if (-not $t) { continue }
+            $id   = if ($t -match '"appid"\s+"(\d+)"')        { $matches[1] }
+            $name = if ($t -match '"name"\s+"([^"]+)"')       { $matches[1] }
+            $inst = if ($t -match '"installdir"\s+"([^"]+)"') { $matches[1] }
+            $flags = 0
+            if ($t -match '"StateFlags"\s+"(\d+)"') { $flags = [int]$matches[1] }
+            # StateFlags bit 4 = fully installed; anything else is mid-download or broken.
+            if (-not $id -or -not $name -or -not $inst -or -not ($flags -band 4)) { continue }
+            $dir = Join-Path $lib ('steamapps\common\' + $inst)
+            if (-not (Test-Path $dir)) { continue }
+            [pscustomobject]@{ AppId = $id; Name = $name; Dir = $dir }
+        }
+    }
+}
+
 function Get-InstalledGames {
     $libs = Get-SteamLibraries
+    $apps = @(Get-SteamApps -Libraries $libs)
     $out = @()
     foreach ($p in $GameProfiles) {
         $r = Resolve-GameProfile -Profile $p -Libraries $libs
-        if ($r) { $out += $r }
+        if (-not $r) { continue }
+        # A tool can share a game's folder: the Skyrim Creation Kit installs into
+        # "Skyrim Special Edition" on its own. If Steam only has tools there, the
+        # game itself is not installed, and launching would open the tool.
+        $owners = @($apps | Where-Object { $_.Dir -eq $r.Dir })
+        if ($owners -and -not @($owners | Where-Object { $_.Name -notmatch $NotGames })) { continue }
+        $out += $r
+    }
+    # Anything installed without a profile still counts, just without a commit
+    # estimate - the pre-flight then falls back to the generic headroom check.
+    foreach ($a in $apps) {
+        if ($a.Name -match $NotGames) { continue }
+        $known = $out | Where-Object { $_.Dir -eq $a.Dir } | Select-Object -First 1
+        if ($known) { if (-not $known.AppId) { $known.AppId = $a.AppId }; continue }
+        $out += [pscustomobject]@{
+            Key = $a.AppId; Name = $a.Name; Dir = $a.Dir; Exe = (Find-GameExe $a.Dir); AppId = $a.AppId
+            VR = $false; CommitGB = $null; Measured = $false
+        }
     }
     return $out
 }
 
+# Processes running from the game's install folder. Matching on folder rather
+# than one exe name catches launchers that hand off to a differently named
+# binary (e.g. Stray.exe -> Stray-Win64-Shipping.exe).
+function Get-GameProcesses {
+    param($Target)
+    $root = $Target.Dir.TrimEnd('\') + '\'
+    @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) -and
+        $_.ProcessName -notmatch 'crash|unins|redist|setup'
+    })
+}
+
+# High, not Realtime: Realtime can starve input and audio threads and lock the
+# machine up. High needs no elevation for your own processes.
+function Set-GamePriority {
+    param($Target, [int]$WaitSeconds = 0)
+    $procs = @(Get-GameProcesses $Target)
+    if (-not $procs -and $WaitSeconds -gt 0) {
+        Write-Host ('  Waiting up to {0}s for {1} to start...' -f $WaitSeconds, $Target.Name) -ForegroundColor DarkGray
+        $deadline = (Get-Date).AddSeconds($WaitSeconds)
+        while (-not $procs -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 2
+            $procs = @(Get-GameProcesses $Target)
+        }
+        # Launchers often hand off a few seconds after starting; catch the real game too.
+        if ($procs) { Start-Sleep -Seconds 5; $procs = @(Get-GameProcesses $Target) }
+    }
+    if (-not $procs) {
+        Write-Host ('  {0} is not running - start it first, or add -Launch.' -f $Target.Name) -ForegroundColor Yellow
+        return
+    }
+    foreach ($p in $procs) {
+        if ($WhatIf) {
+            Write-Host ('    WOULD SET {0} (pid {1}) to High priority' -f $p.ProcessName, $p.Id) -ForegroundColor Yellow
+            continue
+        }
+        try {
+            $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
+            Write-Host ('    {0} (pid {1}) set to High priority' -f $p.ProcessName, $p.Id) -ForegroundColor Green
+        } catch {
+            Write-Host ('    {0} (pid {1}): could not set priority - {2}' -f $p.ProcessName, $p.Id, $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+}
+
 if ($Games) {
+    if ($AsJson) {
+        $list = @(Get-InstalledGames | Sort-Object Name | Select-Object Key, Name, AppId, Dir, Exe, VR)
+        ConvertTo-Json -InputObject $list -Compress
+        return
+    }
     Write-Host ''
     Write-Host '  Games this script can see' -ForegroundColor Cyan
     Write-Host ''
-    Write-Host '    key          game                   type   needs    exe found'
-    Write-Host '    -----------  ---------------------  -----  -------  ---------'
-    foreach ($g in (Get-InstalledGames)) {
-        $need = '{0} GB{1}' -f $g.CommitGB, $(if ($g.Measured) { '*' } else { '' })
-        Write-Host ('    {0,-11}  {1,-21}  {2,-5}  {3,-7}  {4}' -f `
-            $g.Key, $g.Name, $(if ($g.VR) { 'VR' } else { 'flat' }), $need,
+    Write-Host '    key          game                                 type   needs    exe found'
+    Write-Host '    -----------  -----------------------------------  -----  -------  ---------'
+    foreach ($g in (Get-InstalledGames | Sort-Object Name)) {
+        $need = if ($g.CommitGB) { '{0} GB{1}' -f $g.CommitGB, $(if ($g.Measured) { '*' } else { '' }) } else { '?' }
+        $name = if ($g.Name.Length -gt 35) { $g.Name.Substring(0, 34) + '~' } else { $g.Name }
+        Write-Host ('    {0,-11}  {1,-35}  {2,-5}  {3,-7}  {4}' -f `
+            $g.Key, $name, $(if ($g.VR) { 'VR' } else { 'flat' }), $need,
             $(if ($g.Exe) { 'yes' } else { 'no' }))
     }
     Write-Host ''
     Write-Host '    * measured. Others are estimates - treat them as rough.' -ForegroundColor DarkGray
+    Write-Host '    ? no profile yet; found through Steam. Numeric keys are Steam app ids.' -ForegroundColor DarkGray
     Write-Host ''
     return
 }
@@ -342,7 +449,7 @@ function Invoke-PreFlight {
             Write-Check 'warn' 'commit headroom' ('{0} is running but only {1:N1} GB is left - close something' -f $Target.Name, $head)
             $problems++
         }
-    } elseif ($Target) {
+    } elseif ($Target -and $Target.CommitGB) {
         $need = $Target.CommitGB
         $margin = $head - $need
         if ($margin -ge 4) {
@@ -493,7 +600,9 @@ if ($Restore) {
 # A named game decides VR vs flat on its own, so the prompt is skipped.
 $Target = $null
 if ($Game) {
-    $Target = Get-InstalledGames | Where-Object { $_.Key -eq $Game -or $_.Name -like "*$Game*" } | Select-Object -First 1
+    $all = @(Get-InstalledGames)
+    $Target = $all | Where-Object { $_.Key -eq $Game -or $_.AppId -eq $Game } | Select-Object -First 1
+    if (-not $Target) { $Target = $all | Where-Object { $_.Name -like "*$Game*" } | Select-Object -First 1 }
     if (-not $Target) {
         Write-Host ''
         Write-Host ("  No installed game matches '{0}'. Run -Games to list them." -f $Game) -ForegroundColor Yellow
@@ -502,9 +611,24 @@ if ($Game) {
     }
     if ($Target.VR) { $VR = $true; $Flat = $false } else { $Flat = $true; $VR = $false }
     Write-Host ''
-    Write-Host ('  Target: {0}  ({1} session, needs ~{2} GB{3})' -f `
-        $Target.Name, $(if ($Target.VR) { 'VR' } else { 'flat' }), $Target.CommitGB,
-        $(if ($Target.Measured) { ', measured' } else { ', estimated' })) -ForegroundColor Cyan
+    $needTxt = if (-not $Target.CommitGB) { 'memory need unknown' }
+               elseif ($Target.Measured) { 'needs ~{0} GB, measured' -f $Target.CommitGB }
+               else { 'needs ~{0} GB, estimated' -f $Target.CommitGB }
+    Write-Host ('  Target: {0}  ({1} session, {2})' -f `
+        $Target.Name, $(if ($Target.VR) { 'VR' } else { 'flat' }), $needTxt) -ForegroundColor Cyan
+}
+
+# -HighPriority on its own acts on the running game straight away; with
+# -Launch it is applied after the game starts, at the end of the run.
+if ($HighPriority -and -not $Launch) {
+    if (-not $Target) {
+        Write-Host '  -HighPriority needs -Game. Run -Games to list them.' -ForegroundColor Yellow
+        return
+    }
+    Write-Host ''
+    Set-GamePriority -Target $Target
+    Write-Host ''
+    return
 }
 
 # -PinGpu sets the per-app preference the pre-flight check looks for.
@@ -836,8 +960,24 @@ if ($Launch -and $Target -and -not $WhatIf) {
             if ($go -notmatch '^\s*(y|yes)\s*$') { Write-Host '  Not launched.' -ForegroundColor Yellow; return }
         }
         Write-Host ('  Launching {0}...' -f $Target.Name) -ForegroundColor Green
-        try { Start-Process -FilePath $Target.Exe -WorkingDirectory (Split-Path $Target.Exe) }
+        $launched = $false
+        try { Start-Process -FilePath $Target.Exe -WorkingDirectory (Split-Path $Target.Exe); $launched = $true }
         catch { Write-Host ('  Launch failed: {0}' -f $_.Exception.Message) -ForegroundColor Red }
+        if ($launched -and -not $NoHighPriority) { Set-GamePriority -Target $Target -WaitSeconds 120 }
+    }
+    Write-Host ''
+} elseif ($Launch -and $Target -and $WhatIf) {
+    Write-Host ('  WOULD LAUNCH {0}{1}' -f $Target.Name,
+        $(if ($NoHighPriority) { '' } else { ' and set it to High priority' })) -ForegroundColor Yellow
+    Write-Host ''
+} elseif ($Target -and -not $NoHighPriority) {
+    # Not launching: raise the game now if it is already running.
+    if (@(Get-GameProcesses $Target)) {
+        Write-Host '  Game priority' -ForegroundColor Cyan
+        Set-GamePriority -Target $Target
+    } else {
+        Write-Host ('  {0} is not running yet. Once it is: .\gaming-mode.ps1 -Game {1} -HighPriority' -f `
+            $Target.Name, $Target.Key) -ForegroundColor DarkGray
     }
     Write-Host ''
 }

@@ -211,6 +211,77 @@ $xaml = @'
       <Setter Property="FontSize" Value="12"/>
       <Setter Property="Margin" Value="0,0,16,0"/>
     </Style>
+
+    <!-- The stock ComboBox ignores Background and renders light grey, so it
+         gets a minimal template that matches the buttons. -->
+    <Style TargetType="ComboBox">
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Margin" Value="0,0,8,0"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBox">
+            <Grid>
+              <ToggleButton Focusable="False" ClickMode="Press" Cursor="Hand"
+                            IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <ToggleButton.Template>
+                  <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="tb" Background="#1B2430" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="4">
+                      <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,10,0"
+                            Fill="#9EA9B8" Data="M0 0 L8 0 L4 5 Z"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property="IsMouseOver" Value="True">
+                        <Setter TargetName="tb" Property="BorderBrush" Value="#4FB8C0"/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </ToggleButton.Template>
+              </ToggleButton>
+              <ContentPresenter IsHitTestVisible="False" Margin="10,7,28,7" VerticalAlignment="Center"
+                                Content="{TemplateBinding SelectionBoxItem}"
+                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"/>
+              <Popup Placement="Bottom" AllowsTransparency="True" Focusable="False"
+                     IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                <Border Background="#11202A" BorderBrush="#4FB8C0" BorderThickness="1" CornerRadius="4"
+                        MinWidth="{TemplateBinding ActualWidth}" MaxHeight="320" Margin="0,2,0,0">
+                  <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                  </ScrollViewer>
+                </Border>
+              </Popup>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.4"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style TargetType="ComboBoxItem">
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+      <Setter Property="Padding" Value="10,5"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ComboBoxItem">
+            <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
+              <ContentPresenter/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsSelected" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#17525A"/>
+              </Trigger>
+              <Trigger Property="IsHighlighted" Value="True">
+                <Setter TargetName="bd" Property="Background" Value="#243041"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
   </Window.Resources>
 
   <Grid Margin="16">
@@ -290,6 +361,7 @@ $xaml = @'
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
           </Grid.RowDefinitions>
 
           <StackPanel Grid.Row="0" Orientation="Horizontal">
@@ -317,6 +389,18 @@ $xaml = @'
           </Border>
 
           <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,12,0,0">
+            <TextBlock Text="Game" Foreground="#9EA9B8" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"/>
+            <ComboBox x:Name="CbGame" Width="250" IsEnabled="False"
+                      ToolTip="Steam games installed on this PC, found from your Steam libraries on every drive. The choice is remembered for next time." />
+            <Button x:Name="BtnGameLaunch" Content="Launch at High priority" IsEnabled="False"
+                    ToolTip="Start the selected game through Steam, then raise it to High CPU priority as soon as it is running. Watches for up to 3 minutes, and keeps watching briefly after it appears so a launcher handing off to the real game is caught too. High, never Realtime: Realtime can starve input and audio. No admin needed." />
+            <Button x:Name="BtnGamePriority" Content="Set High priority" IsEnabled="False"
+                    ToolTip="Raise the selected game to High CPU priority now, if it is already running. Every process running from the game's install folder is included. Windows resets this when the game is restarted." />
+            <TextBlock x:Name="TxtGame" Text="" Foreground="#78838F" FontSize="11.5"
+                       VerticalAlignment="Center" Margin="4,0,0,0" TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+
+          <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,12,0,0">
             <Button x:Name="BtnApply" Style="{StaticResource Primary}" Content="Apply selection" ToolTip="Apply the VR choice, then close every ticked app. Each one is asked to close normally first so it can save; only apps that ignore that are forced after a few seconds." />
             <Button x:Name="BtnRescan" Content="Rescan" ToolTip="Rebuild the list from what is running right now. Useful after you have opened or closed things yourself." />
             <Button x:Name="BtnRestoreVr" Content="Restore VR stack" ToolTip="Start the VR services again and put the power plan back the way it was. Use this when you have finished playing." />
@@ -448,6 +532,7 @@ $win = [Windows.Markup.XamlReader]::Load($reader)
 foreach ($n in @('TxtMachine','TxtCommit','TxtHead','TxtGpu','TxtFaults','BtnRefresh',
                  'RbVr','RbFlat','BtnPreClean','BtnPreBrowse','BtnPreWork','BtnPreNone',
                  'PnlProcs','BtnApply','BtnRescan','BtnRestoreVr','TxtSel',
+                 'CbGame','BtnGameLaunch','BtnGamePriority','TxtGame',
                  'TxtFaultDetail','BtnFaultCount','BtnFaultBaseline','BtnFaultAnalyze',
                  'TxtMon','BtnVideoReport','BtnGpuMonitor','BtnMonRemove',
                  'TxtDisk','BtnCleanScan','BtnCleanApply',
@@ -922,7 +1007,191 @@ function Set-Preset {
     Write-Log ("preset '{0}' applied{1}" -f $Name, $(if ($kept.Count) { ' - keeping ' + ($kept -join ', ') } else { '' }))
 }
 
+# ---------------------------------------------------------------- Steam games
+# The list comes from gaming-mode.ps1 -Games -AsJson so both tools agree on
+# what is installed. Finding games and enumerating their executables can take
+# several seconds on a cold disk, so it runs in a background runspace.
+
+$script:GameJob     = $null
+$script:GameWatch   = $null
+$script:LastGameFile = Join-Path $Root 'diag\control-panel-game.txt'
+
+function Start-GameScan {
+    if ($script:GameJob) { return }
+    $CbGame.IsEnabled = $false; $BtnGameLaunch.IsEnabled = $false; $BtnGamePriority.IsEnabled = $false
+    $TxtGame.Text = 'finding Steam games...'
+    $iss = [initialsessionstate]::CreateDefault()
+    $iss.ExecutionPolicy = 'Bypass'
+    $ps = [powershell]::Create($iss).AddScript({
+        param($ScriptPath)
+        $games = @(& $ScriptPath -Games -AsJson | ConvertFrom-Json | ForEach-Object { $_ })
+        foreach ($g in $games) {
+            # Every executable name in the install folder, so the priority watcher
+            # can look processes up by name (milliseconds) instead of reading the
+            # path of every running process (~200 ms) on each tick.
+            $names = @(Get-ChildItem -LiteralPath $g.Dir -Recurse -Filter '*.exe' -File -ErrorAction SilentlyContinue |
+                       Where-Object { $_.BaseName -notmatch 'crash|unins|redist|setup' } |
+                       ForEach-Object { $_.BaseName } | Select-Object -Unique)
+            Add-Member -InputObject $g -NotePropertyName ExeNames -NotePropertyValue $names
+            $g
+        }
+    }).AddArgument((Join-Path $Root 'gaming-mode.ps1'))
+    $script:GameJob = @{ PS = $ps; Handle = $ps.BeginInvoke() }
+
+    $t = New-Object Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(300)
+    $t.Add_Tick({ if (Receive-GameScan) { $this.Stop() } })
+    $t.Start()
+}
+
+function Receive-GameScan {
+    $j = $script:GameJob
+    if (-not $j -or -not $j.Handle.IsCompleted) { return $false }
+    $script:GameJob = $null
+    $CbGame.Items.Clear()
+    try {
+        $games = @($j.PS.EndInvoke($j.Handle))
+        $last = ''
+        if (Test-Path $script:LastGameFile) { $last = (Get-Content $script:LastGameFile -Raw -ErrorAction SilentlyContinue).Trim() }
+        foreach ($g in $games) {
+            $item = New-Object Windows.Controls.ComboBoxItem
+            $item.Content = $(if ($g.VR) { '{0}  (VR)' -f $g.Name } else { $g.Name })
+            $item.Tag = $g
+            $item.ToolTip = $g.Dir
+            [void]$CbGame.Items.Add($item)
+            if ($g.Key -eq $last) { $CbGame.SelectedItem = $item }
+        }
+        if ($games.Count) {
+            if ($CbGame.SelectedIndex -lt 0) { $CbGame.SelectedIndex = 0 }
+            $CbGame.IsEnabled = $true; $BtnGameLaunch.IsEnabled = $true; $BtnGamePriority.IsEnabled = $true
+            $TxtGame.Text = '{0} games' -f $games.Count
+            Write-Log ('found {0} installed Steam games' -f $games.Count)
+        } else {
+            $TxtGame.Text = 'no Steam games found'
+            Write-Log 'no installed Steam games found' 'warn'
+        }
+    } catch {
+        $TxtGame.Text = 'could not read Steam games'
+        Write-Log ('could not list Steam games: {0}' -f $_.Exception.Message) 'err'
+    } finally { $j.PS.Dispose() }
+    return $true
+}
+
+function Get-SelectedGame {
+    if ($CbGame.SelectedItem) { return $CbGame.SelectedItem.Tag }
+    return $null
+}
+
+# Processes belonging to the game: looked up by the game's own executable
+# names, then confirmed by path, so a same-named exe elsewhere is never touched.
+function Get-GameProcesses {
+    param($Game)
+    $names = @($Game.ExeNames)
+    if (-not $names) { return @() }
+    $root = $Game.Dir.TrimEnd('\') + '\'
+    @(Get-Process -Name $names -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+    })
+}
+
+# High, not Realtime: Realtime can starve input and audio threads.
+function Set-GameHigh {
+    param($Procs, [hashtable]$Done)
+    $n = 0
+    foreach ($p in $Procs) {
+        if ($Done -and $Done.ContainsKey($p.Id)) { continue }
+        try {
+            $p.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
+            Write-Log ('{0} (pid {1}) set to High priority' -f $p.ProcessName, $p.Id) 'ok'
+            $n++
+        } catch {
+            Write-Log ('{0} (pid {1}): could not set priority - {2}' -f $p.ProcessName, $p.Id, $_.Exception.Message) 'warn'
+        }
+        if ($Done) { $Done[$p.Id] = $true }
+    }
+    return $n
+}
+
+function Stop-GameWatch {
+    if ($script:GameWatch) { $script:GameWatch.Timer.Stop(); $script:GameWatch = $null }
+}
+
+# Polls every 2 s until the game appears, then keeps going for 20 s more:
+# launchers often hand off to a differently named binary a few seconds later.
+function Start-GameWatch {
+    param($Game, [int]$WaitSeconds = 180)
+    Stop-GameWatch
+    $t = New-Object Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromSeconds(2)
+    $script:GameWatch = @{
+        Game = $Game; Timer = $t; Deadline = (Get-Date).AddSeconds($WaitSeconds); WaitSeconds = $WaitSeconds
+        FoundAt = $null; Done = @{}; Count = 0
+    }
+    $t.Add_Tick({
+        $w = $script:GameWatch
+        if (-not $w) { $this.Stop(); return }
+        $procs = @(Get-GameProcesses $w.Game)
+        if ($procs) {
+            if (-not $w.FoundAt) { $w.FoundAt = Get-Date }
+            $w.Count += (Set-GameHigh -Procs $procs -Done $w.Done)
+            $TxtGame.Text = '{0}: High priority' -f $w.Game.Name
+        }
+        $settled = $w.FoundAt -and ((Get-Date) - $w.FoundAt).TotalSeconds -ge 20
+        $expired = -not $w.FoundAt -and (Get-Date) -gt $w.Deadline
+        if ($settled -or $expired) {
+            Stop-GameWatch
+            if ($expired) {
+                $TxtGame.Text = 'game did not start'
+                Write-Log ('{0} did not start within {1} s - priority not set' -f $w.Game.Name, $w.WaitSeconds) 'warn'
+            } else {
+                Write-Log ('{0}: {1} process(es) at High priority' -f $w.Game.Name, $w.Count) 'ok'
+            }
+        }
+    })
+    $t.Start()
+}
+
+function Save-LastGame {
+    param($Game)
+    try {
+        New-Item -ItemType Directory -Path (Split-Path $script:LastGameFile) -Force | Out-Null
+        Set-Content -LiteralPath $script:LastGameFile -Value $Game.Key -Encoding utf8
+    } catch { }
+}
+
 # ------------------------------------------------------------------- actions
+
+$BtnGameLaunch.Add_Click({
+    $g = Get-SelectedGame
+    if (-not $g) { return }
+    Save-LastGame $g
+    try {
+        # Through Steam where possible, so DRM, the overlay and cloud saves work.
+        if ($g.AppId)   { Start-Process ('steam://rungameid/{0}' -f $g.AppId) }
+        elseif ($g.Exe) { Start-Process -FilePath $g.Exe -WorkingDirectory (Split-Path $g.Exe) }
+        else { Write-Log ('{0}: no executable found to launch' -f $g.Name) 'warn'; return }
+    } catch {
+        Write-Log ('could not launch {0}: {1}' -f $g.Name, $_.Exception.Message) 'err'
+        return
+    }
+    $TxtGame.Text = 'waiting for {0}...' -f $g.Name
+    Write-Log ('launching {0} - High priority will be set once it is running' -f $g.Name) 'ok'
+    Start-GameWatch -Game $g
+})
+
+$BtnGamePriority.Add_Click({
+    $g = Get-SelectedGame
+    if (-not $g) { return }
+    Save-LastGame $g
+    $procs = @(Get-GameProcesses $g)
+    if (-not $procs) {
+        $TxtGame.Text = '{0} is not running' -f $g.Name
+        Write-Log ('{0} is not running - use Launch at High priority instead' -f $g.Name) 'warn'
+        return
+    }
+    [void](Set-GameHigh -Procs $procs)
+    $TxtGame.Text = '{0}: High priority' -f $g.Name
+})
 
 $BtnRefresh.Add_Click({ Update-Status -IncludeSlow; Write-Log 'readings refreshed' })
 $BtnRescan.Add_Click({ Build-ProcessList })
@@ -1155,7 +1424,8 @@ $win.Add_Loaded({
     Write-Log 'control panel ready'
     Update-Status -IncludeSlow
     Build-ProcessList
+    Start-GameScan
 })
-$win.Add_Closed({ $timer.Stop() })
+$win.Add_Closed({ $timer.Stop(); Stop-GameWatch })
 
 [void]$win.ShowDialog()
