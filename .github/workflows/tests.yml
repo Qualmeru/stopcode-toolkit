@@ -23,3 +23,17 @@ jobs:
       - name: Run tests
         shell: powershell
         run: python tests\run_tests.py
+
+  setup-smoke:
+    # Installs and removes the scheduled tasks and shortcuts for real, so it
+    # only runs on a throwaway runner.
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Smoke-test setup and removal
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests\smoke-setup.ps1
