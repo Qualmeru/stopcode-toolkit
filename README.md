@@ -220,13 +220,42 @@ Nothing else is written outside the clone: all state and output lives in
 - Windows 10 or 11
 - **Windows PowerShell 5.1** — the scripts avoid `?:`, `??` and `::new()`
   accordingly
-- Python 3 is optional, for `analyze-dump.py` only; `watch-dumps.ps1` carries
-  its own parser in PowerShell so the scheduled task has no dependency
+- Python 3 is optional for the toolkit, but required for `analyze-dump.py`;
+  the test suite needs Python 3.7 or newer. `watch-dumps.ps1` carries its own
+  PowerShell parser
 - `nvidia-smi` for GPU telemetry, if present
 
 Most of it runs unelevated. Reading `C:\Windows\Minidump`, the WER folders,
 service control and driver installation need admin; each script says so and
 elevates itself rather than failing quietly.
+
+---
+
+## Tests and continuous integration
+
+The tests use synthetic dumps and do not install scheduled tasks. Run them with
+Python 3.7 or newer and Windows PowerShell 5.1:
+
+```
+python3 tests\run_tests.py
+```
+
+GitHub Actions runs the same tests on Windows for every push and pull request.
+The results appear on GitHub after the commits are pushed.
+
+To run the tests automatically before each `git commit`, enable the hook once
+per clone:
+
+```
+git config --local core.hooksPath .githooks
+```
+
+The hook blocks a commit if tests fail, no tests are found, or a suitable Python
+is unavailable. If Python is not found automatically, set `STOPCODE_PYTHON` in
+the environment running Git to the path of its executable. The hook tests the
+working tree, so keep it consistent with what you stage. Git's `--no-verify`
+option bypasses the hook. If you already use a custom hooks directory, combine
+your hooks before changing `core.hooksPath`.
 
 ---
 

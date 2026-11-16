@@ -77,19 +77,35 @@ foreach ($d in $dumps) {
     $lines += ('=' * 72)
 
     $buf = New-Object byte[] 0x3000
+    $bytesRead = 0
     try {
         $fs = [System.IO.File]::Open($d.FullName, 'Open', 'Read', 'ReadWrite')
-        $null = $fs.Read($buf, 0, $buf.Length)
-        $fs.Close()
+        try {
+            while ($bytesRead -lt $buf.Length) {
+                $n = $fs.Read($buf, $bytesRead, $buf.Length - $bytesRead)
+                if ($n -eq 0) { break }
+                $bytesRead += $n
+            }
+        } finally {
+            $fs.Dispose()
+        }
     } catch {
         $lines += ('  cannot open: {0}' -f $_.Exception.Message)
         continue
     }
 
+    if ($bytesRead -lt 8) {
+        $lines += '  truncated dump header - cannot parse'
+        continue
+    }
     $sig = [System.Text.Encoding]::ASCII.GetString($buf, 0, 8)
     $lines += ('  signature      : {0}' -f $sig)
     if ($sig -ne 'PAGEDU64') {
         $lines += '  not a 64-bit kernel dump - cannot parse'
+        continue
+    }
+    if ($bytesRead -lt 0x2000) {
+        $lines += '  truncated dump header - cannot parse'
         continue
     }
 
@@ -104,6 +120,13 @@ foreach ($d in $dumps) {
     # varies by build, so the triage probe below is the reliable test.
     $lines += ('  machine type   : 0x{0:X}' -f [BitConverter]::ToUInt32($buf, 0x30))
     $lines += ('  processors     : {0}' -f [BitConverter]::ToUInt32($buf, 0x34))
+
+    if ($bytesRead -lt 0x2038) {
+        $lines += ''
+        $lines += '  triage section probe: unavailable (truncated dump)'
+        $lines += ''
+        continue
+    }
 
     # Probe for a _TRIAGE_DUMP64 at 0x2000: SizeOfDump and DriverCount should be sane.
     $sizeOfDump  = [BitConverter]::ToUInt32($buf, 0x2000 + 0x04)

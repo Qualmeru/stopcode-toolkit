@@ -92,7 +92,7 @@ def read_modules(d, driver_list_off, count):
         name = ''
         if 0 < name_off < len(d) - 4:
             ln, = struct.unpack_from('<I', d, name_off)
-            if 0 < ln < 260:
+            if 0 < ln < 260 and name_off + 4 + ln * 2 <= len(d):
                 name = d[name_off + 4:name_off + 4 + ln * 2].decode('utf-16-le', 'replace')
         if base:
             mods.append((base, size, name))
@@ -159,7 +159,7 @@ def analyze(path):
 
     cs, css = t['CallStackOffset'], t['SizeOfCallStack']
     frames, suspects = [], []
-    for o in range(cs, min(cs + css, len(d) - 8), 8):
+    for o in range(cs, min(cs + css, len(d)) - 7, 8):
         v, = struct.unpack_from('<Q', d, o)
         n2, o2 = resolve(mods, v)
         if n2 and (not frames or frames[-1][0] != n2):

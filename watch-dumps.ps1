@@ -164,7 +164,7 @@ function Read-KernelDump {
     $resolve = {
         param($addr)
         foreach ($m in $sorted) {
-            if ($addr -ge $m.Base -and $addr -lt ($m.Base + $m.Size)) {
+            if ($m.Name -and $addr -ge $m.Base -and $addr -lt ($m.Base + $m.Size)) {
                 return [pscustomobject]@{ Name = $m.Name; Offset = $addr - $m.Base }
             }
         }
@@ -174,8 +174,8 @@ function Read-KernelDump {
     $frames   = New-Object System.Collections.Generic.List[object]
     $lastName = ''
     if ($callStackSize -gt 0) {
-        $end = [Math]::Min($callStackOff + $callStackSize, $d.Length - 8)
-        for ($o = $callStackOff; $o -lt $end; $o += 8) {
+        $end = [Math]::Min([long]$callStackOff + [long]$callStackSize, [long]$d.Length)
+        for ($o = [long]$callStackOff; $o + 8 -le $end; $o += 8) {
             $v = [BitConverter]::ToUInt64($d, $o)
             $r = & $resolve $v
             if ($r -and $r.Name -ne $lastName) {

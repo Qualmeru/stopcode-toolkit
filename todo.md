@@ -2,8 +2,11 @@
 
 ## High priority
 
-- [ ] Add focused tests for the dump parsers, covering valid headers and truncated or malformed input. Use small synthetic fixtures rather than committing real dumps.
+- [x] Add focused tests for the dump parsers, covering valid headers and truncated or malformed input. Use small synthetic fixtures rather than committing real dumps.
+- [x] Run the test suite before each Git commit, blocking the commit if tests fail or a suitable Python is unavailable.
+- [ ] Confirm the GitHub Actions test workflow succeeds after it is pushed.
 - [ ] Smoke-test setup on a clean Windows 10/11 machine with Windows PowerShell 5.1. Verify the scheduled tasks install, run, report their status, and uninstall as documented.
+  - Checked script syntax and mocked the install/start/status/uninstall flows locally; a real clean-machine test is still needed.
 
 ## Gaming mode
 

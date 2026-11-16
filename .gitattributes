@@ -19,6 +19,7 @@
 *.html  text eol=lf
 *.json  text eol=lf
 *.yml   text eol=lf
+.githooks/pre-commit text eol=lf
 
 # Binary: never convert, never diff as text.
 *.ico   binary
