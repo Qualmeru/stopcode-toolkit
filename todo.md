@@ -16,11 +16,12 @@
 - [x] Test waiting for a delayed game start: a simulated launcher started the game after 5 s and it was set to High within the wait window.
 - [x] Make a plain `-Game <name>` run set the game to High priority too: right away if it is running, after `-Launch` once it starts. Add `-NoHighPriority` to opt out.
 - [x] Test `-Game witcher3` with a stand-in process in the Witcher 3 folder: not running shows a hint, `-WhatIf` reports WOULD SET and leaves it Normal, a real run sets it to High, and `-NoHighPriority` skips the step.
-- [ ] Confirm `-Game <name> -Launch` with a real Steam game, including games that relaunch through Steam or hand off from a launcher.
+- [x] Confirm `-Game <name> -Launch` with a real Steam game, including games that relaunch through Steam or hand off from a launcher.
 - [x] Add a Steam game picker to the Control Panel, with **Launch at High priority** (through Steam) and **Set High priority**. The game list loads in the background and the last game chosen is remembered.
 - [x] Test the panel's game features: the list matches `-Games -AsJson`, the XAML loads, a stand-in game that started 5 s late was raised to High, and a game that never starts times out with a warning.
 - [x] Fix tool folders being treated as games: Skyrim SE was listed only because the Creation Kit shares its folder, and launching it would have opened the Creation Kit.
-- [ ] Click through the Control Panel game row by hand with a real game: dropdown look, launch through Steam, priority shown in Task Manager.
+- [x] Click through the Control Panel game row by hand with a real game: dropdown look, launch through Steam, priority shown in Task Manager.
+  - Verified with The Witcher 3: launched through Steam twice, `witcher3` (pid 12168) set to High both times, and `-Restore` was launched from the panel afterwards.
 - [ ] Add commit-size profiles for games found through Steam that show `?` in `-Games`.
 
 ## Follow-up
