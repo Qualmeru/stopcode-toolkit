@@ -5,9 +5,9 @@
 - [x] Add focused tests for the dump parsers, covering valid headers and truncated or malformed input. Use small synthetic fixtures rather than committing real dumps.
 - [x] Run the test suite before each Git commit, blocking the commit if tests fail or a suitable Python is unavailable.
 - [x] Confirm the GitHub Actions test workflow succeeds after it is pushed.
-- [ ] Smoke-test setup on a clean Windows 10/11 machine with Windows PowerShell 5.1. Verify the scheduled tasks install, run, report their status, and uninstall as documented.
+- [x] Smoke-test setup on a clean Windows 10/11 machine with Windows PowerShell 5.1. Verify the scheduled tasks install, run, report their status, and uninstall as documented.
   - [x] Automated in GitHub Actions (`setup-smoke` job, `tests\smoke-setup.ps1`) on a fresh Windows Server 2025 runner with PowerShell 5.1: both tasks install, run, show `Running`, uninstall with no processes left, and shortcuts are created and removed.
-  - [ ] Still untested on a desktop Windows 10/11 with UAC on: the runner is already elevated, so the UAC prompt path of `-Install`/`-Uninstall` is not exercised.
+  - [x] UAC path checked on Windows 11 desktop (UAC on, unelevated shell): `log-video-engine.ps1 -Uninstall` and `-Install` and `watch-dumps.ps1 -Install` each prompted, then removed, reinstalled (Limited) and restarted (Highest) the tasks.
 
 ## Gaming mode
 
