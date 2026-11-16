@@ -241,6 +241,11 @@ python3 tests\run_tests.py
 ```
 
 GitHub Actions runs the same tests on Windows for every push and pull request.
+A second job, `setup-smoke`, runs the setup steps above on a fresh runner. It
+installs both scheduled tasks, checks they run and report `Running`, uninstalls
+them, creates and removes the shortcuts, and fails if anything is left behind or
+written outside `diag\`. The script is `tests\smoke-setup.ps1`. It stops without
+changing anything on a machine that already has the tasks or shortcuts.
 The results appear on GitHub after the commits are pushed.
 
 To run the tests automatically before each `git commit`, enable the hook once

@@ -6,7 +6,8 @@
 - [x] Run the test suite before each Git commit, blocking the commit if tests fail or a suitable Python is unavailable.
 - [x] Confirm the GitHub Actions test workflow succeeds after it is pushed.
 - [ ] Smoke-test setup on a clean Windows 10/11 machine with Windows PowerShell 5.1. Verify the scheduled tasks install, run, report their status, and uninstall as documented.
-  - Checked script syntax and mocked the install/start/status/uninstall flows locally; a real clean-machine test is still needed.
+  - [x] Automated in GitHub Actions (`setup-smoke` job, `tests\smoke-setup.ps1`) on a fresh Windows Server 2025 runner with PowerShell 5.1: both tasks install, run, show `Running`, uninstall with no processes left, and shortcuts are created and removed.
+  - [ ] Still untested on a desktop Windows 10/11 with UAC on: the runner is already elevated, so the UAC prompt path of `-Install`/`-Uninstall` is not exercised.
 
 ## Gaming mode
 
@@ -29,3 +30,4 @@
 - [ ] Verify which scripts require elevation and that each reports or requests it as documented; include unelevated and elevated checks in the setup validation.
 - [ ] Review machine-specific process recommendations and vendor notes, and make sure users can identify what they should customize before relying on them.
 - [ ] Check that monitoring and diagnostic outputs stay within `diag\` and that the documented removal steps leave no scheduled tasks or shortcuts behind.
+  - Removal and the install/run flow are covered by the `setup-smoke` CI job; the other scripts' outputs are not checked yet.
